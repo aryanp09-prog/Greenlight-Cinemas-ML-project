@@ -1,5 +1,6 @@
 # Data — never commit the datasets (900MB+, live on Colab/Drive)
-data/
+# Leading slash = root-level only, so src/data/ source code is NOT ignored
+/data/
 *.csv
 *.zip
 *.parquet
