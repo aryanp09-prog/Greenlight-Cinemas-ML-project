@@ -2,11 +2,11 @@ import pandas as pd
 import ast 
 
 def load_and_clean_movies(path: str) -> pd.DataFrame:
-    movies = pd.read_csv(path, low_memory = False)
+    movies = pd.read_csv(path, low_memory=False)
     for col in ['budget', 'revenue', 'popularity', 'id']:
-        movies[col] = pd.to_numeric(movies[col], errors = 'coerce')
-        movies['release_date'] = pd.to_datetime(movies['release_date'], errors = 'coerce')
-        movies['release_year']  = movies['release_date'].dt.year
+        movies[col] = pd.to_numeric(movies[col], errors='coerce')
+    movies['release_date']  = pd.to_datetime(movies['release_date'], errors='coerce')
+    movies['release_year']  = movies['release_date'].dt.year
     movies['release_month'] = movies['release_date'].dt.month
     movies['genre_list']    = movies['genres'].apply(_parse_genres)
     return movies
