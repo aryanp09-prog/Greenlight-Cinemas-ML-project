@@ -118,8 +118,9 @@ div[data-testid="collapsedControl"] { display: none; }
 .meta-chip { color:#d9d2bb; font-size:0.92rem; }
 .meta-chip b { color: var(--gold-bright); }
 .insight { border-radius: 12px; padding: 12px 16px; margin: 6px 0 14px; font-size: 0.96rem; line-height:1.45; }
-.insight-sweet { background: rgba(120,200,120,0.10); border: 1px solid rgba(120,200,120,0.45); color: #d2f0d2; }
-.insight-high  { background: rgba(230,160,60,0.10);  border: 1px solid rgba(230,160,60,0.5);  color: #f2dcb0; }
+.insight-strong { background: rgba(120,200,120,0.10); border: 1px solid rgba(120,200,120,0.45); color: #d2f0d2; }
+.insight-solid  { background: rgba(230,180,70,0.10);  border: 1px solid rgba(230,180,70,0.5);  color: #f2e0b0; }
+.insight-weak   { background: rgba(230,90,90,0.10);   border: 1px solid rgba(230,90,90,0.5);   color: #f2c2c2; }
 .badge-demo { position: fixed; top: 10px; right: 16px; z-index: 999;
   background: rgba(212,175,55,0.15); border:1px solid var(--gold); color: var(--gold-bright);
   padding: 3px 12px; border-radius: 999px; font-size: 0.72rem; letter-spacing:1px; }
@@ -159,13 +160,29 @@ def cast_grid(people):
     st.markdown(f'<div class="grid">{cards}</div>', unsafe_allow_html=True)
 
 
-# per-genre ROI sweet-spot caps (DEMO placeholders; live mode uses constraints["budget_insights"])
-GENRE_BUDGET_CAP = {
-    "Horror": 10_000_000, "Thriller": 25_000_000, "Comedy": 30_000_000,
-    "Drama": 20_000_000, "Romance": 20_000_000, "Mystery": 20_000_000,
-    "Crime": 30_000_000, "Family": 60_000_000, "Animation": 90_000_000,
-    "Science Fiction": 120_000_000, "Action": 150_000_000, "Fantasy": 150_000_000,
+# real median ROI by budget band, per genre (from DuckDB on 6,444 ROI films; DEMO copy —
+# live mode reads constraints["budget_insights"]).  values = (roi_multiple, sample_n)
+BAND_DEFS = [("<1M", 1_000_000), ("1-10M", 10_000_000), ("10-40M", 40_000_000),
+             ("40-100M", 100_000_000), ("100M+", None)]
+BAND_DISP = {"<1M": "under $1M", "1-10M": "$1–10M", "10-40M": "$10–40M",
+             "40-100M": "$40–100M", "100M+": "$100M+"}
+GENRE_BANDS = {
+    "Horror":          {"<1M": (4.08, 66),  "1-10M": (2.56, 300),  "10-40M": (2.32, 283),  "40-100M": (2.12, 80),  "100M+": (2.48, 16)},
+    "Thriller":        {"<1M": (3.33, 71),  "1-10M": (2.33, 491),  "10-40M": (1.50, 709),  "40-100M": (1.75, 399), "100M+": (2.66, 113)},
+    "Comedy":          {"<1M": (3.07, 126), "1-10M": (2.00, 595),  "10-40M": (1.89, 882),  "40-100M": (2.13, 436), "100M+": (2.73, 121)},
+    "Drama":           {"<1M": (2.71, 225), "1-10M": (1.85, 1007), "10-40M": (1.31, 1219), "40-100M": (1.86, 442), "100M+": (2.33, 105)},
+    "Romance":         {"<1M": (3.60, 89),  "1-10M": (2.34, 351),  "10-40M": (1.69, 463),  "40-100M": (2.00, 174), "100M+": (2.76, 25)},
+    "Action":          {"<1M": (8.33, 45),  "1-10M": (2.12, 339),  "10-40M": (1.57, 601),  "40-100M": (1.81, 458), "100M+": (2.67, 309)},
+    "Science Fiction": {"<1M": (4.00, 35),  "1-10M": (1.53, 135),  "10-40M": (1.46, 243),  "40-100M": (1.58, 184), "100M+": (2.61, 172)},
+    "Fantasy":         {"<1M": (2.45, 19),  "1-10M": (1.59, 103),  "10-40M": (1.42, 201),  "40-100M": (1.88, 190), "100M+": (2.75, 153)},
 }
+
+
+def _band_for(budget):
+    for name, cap in BAND_DEFS:
+        if cap is None or budget < cap:
+            return name
+    return "100M+"
 
 
 def _fmt_money(n):
@@ -200,14 +217,26 @@ def _parse_budget(text):
 def budget_insight(genre, budget):
     if not budget:
         return None
-    cap = GENRE_BUDGET_CAP.get(genre, 50_000_000)
-    if budget <= cap:
-        return {"verdict": "sweet",
-                "message": f"{_fmt_money(budget)} sits inside {genre}'s ROI sweet spot (≤ {_fmt_money(cap)}). "
-                           f"The data rewards lean {genre.lower()} budgets — strong return per dollar."}
-    return {"verdict": "high",
-            "message": f"{_fmt_money(budget)} is above {genre}'s ROI sweet spot (≤ {_fmt_money(cap)}). "
-                       f"Historically, leaner {genre.lower()} films return more per dollar — consider trimming scope."}
+    bands = GENRE_BANDS.get(genre)
+    if not bands:
+        return None
+    band = _band_for(budget)
+    roi, n = bands[band]
+    peak = max(bands, key=lambda b: bands[b][0])
+    micro, big = bands["<1M"][0], bands["100M+"][0]
+    label = BAND_DISP[band]
+    if roi >= 2.5:
+        v, msg = "strong", (f"{_fmt_money(budget)} lands in {genre}'s {label} band — median ROI "
+                            f"{roi}× (n={n}). Strong return territory.")
+    elif roi >= 2.0:
+        v, msg = "solid", (f"{_fmt_money(budget)} lands in {genre}'s {label} band — median ROI "
+                           f"{roi}× (n={n}). Solid, though {genre} peaks in the {BAND_DISP[peak]} band "
+                           f"({bands[peak][0]}×).")
+    else:
+        v, msg = "weak", (f"{_fmt_money(budget)} lands in {genre}'s {label} band — median ROI only "
+                          f"{roi}× (n={n}). This is {genre}'s mid-budget valley; the data favors leaner "
+                          f"(under $1M, {micro}×) or tentpole ($100M+, {big}×).")
+    return {"verdict": v, "message": msg, "roi": roi, "band": band}
 
 
 def _light_parse(prompt: str):
@@ -474,8 +503,8 @@ def page_create():
     )
     ins = result.get("budget_insight")
     if ins:
-        cls = "insight-sweet" if ins["verdict"] == "sweet" else "insight-high"
-        icon = "✅" if ins["verdict"] == "sweet" else "⚠️"
+        cls = {"strong": "insight-strong", "solid": "insight-solid", "weak": "insight-weak"}.get(ins["verdict"], "insight-solid")
+        icon = {"strong": "✅", "solid": "👍", "weak": "⚠️"}.get(ins["verdict"], "•")
         st.markdown(f'<div class="insight {cls}">{icon} {ins["message"]}</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="script-panel">{result["synopsis"]}</div>', unsafe_allow_html=True)
 
