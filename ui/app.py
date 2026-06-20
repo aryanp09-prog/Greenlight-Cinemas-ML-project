@@ -11,6 +11,8 @@ DEMO_MODE = False; the UI calls it via call_backend() with no other changes.
 """
 import time
 import re
+import os
+import json
 import urllib.parse
 import requests
 import streamlit as st
@@ -141,10 +143,18 @@ st.markdown(f'<div class="badge-demo">{"● LIVE" if _live else "DEMO MODE"}</di
 # ----------------------------------------------------------------------------
 # HELPERS
 # ----------------------------------------------------------------------------
+_FACES_PATH = os.path.join(os.path.dirname(__file__), "faces.json")
+try:
+    _FACES = json.load(open(_FACES_PATH, encoding="utf-8")) if os.path.exists(_FACES_PATH) else {}
+except Exception:
+    _FACES = {}
+
+
 def face(name: str) -> str:
-    """Placeholder real-face photo (stable per name). Swap to TMDB profile URL later."""
-    seed = urllib.parse.quote(name)
-    return f"https://i.pravatar.cc/220?u={seed}"
+    """Real TMDB profile photo if ingested (ui/faces.json), else a stable placeholder."""
+    if _FACES.get(name):
+        return _FACES[name]
+    return f"https://i.pravatar.cc/220?u={urllib.parse.quote(name)}"
 
 
 def cast_grid(people):
