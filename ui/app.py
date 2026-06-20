@@ -123,8 +123,15 @@ div[data-testid="collapsedControl"] { display: none; }
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
-if DEMO_MODE:
-    st.markdown('<div class="badge-demo">DEMO MODE</div>', unsafe_allow_html=True)
+
+# session defaults (seeded from the constants above)
+if "backend_url" not in st.session_state:
+    st.session_state.backend_url = BACKEND_URL
+if "use_live" not in st.session_state:
+    st.session_state.use_live = (not DEMO_MODE) and bool(BACKEND_URL)
+
+_live = st.session_state.use_live and bool(st.session_state.backend_url.strip())
+st.markdown(f'<div class="badge-demo">{"● LIVE" if _live else "DEMO MODE"}</div>', unsafe_allow_html=True)
 
 
 # ----------------------------------------------------------------------------
@@ -207,12 +214,14 @@ def mock_result(prompt: str):
 
 
 def call_backend(prompt: str):
-    if DEMO_MODE or not BACKEND_URL:
-        time.sleep(0.4)
-        return mock_result(prompt)
-    r = requests.post(f"{BACKEND_URL}/generate", json={"prompt": prompt}, timeout=REQUEST_TIMEOUT)
-    r.raise_for_status()
-    return r.json()
+    url = st.session_state.get("backend_url", "").strip()
+    live = st.session_state.get("use_live", False)
+    if live and url:
+        r = requests.post(f"{url}/generate", json={"prompt": prompt}, timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+    time.sleep(0.4)
+    return mock_result(prompt)
 
 
 # ----------------------------------------------------------------------------
@@ -265,6 +274,31 @@ def page_create():
     )
     st.markdown('<div class="gold-rule"></div>', unsafe_allow_html=True)
 
+    with st.expander("⚙️  Backend settings  ·  " + ("🟢 LIVE" if _live else "🟡 DEMO")):
+        st.session_state.backend_url = st.text_input(
+            "Colab backend URL (from the cloudflared cell)",
+            value=st.session_state.get("backend_url", ""),
+            placeholder="https://xxxx.trycloudflare.com",
+        )
+        st.session_state.use_live = st.checkbox(
+            "Use live backend  (uncheck = demo / no GPU)",
+            value=st.session_state.get("use_live", False),
+        )
+        if st.button("🔌 Test connection", type="secondary"):
+            u = st.session_state.backend_url.strip()
+            if not u:
+                st.warning("Enter the backend URL first.")
+            else:
+                try:
+                    h = requests.get(f"{u}/health", timeout=10)
+                    if h.ok and h.json().get("status") == "ok":
+                        st.success("Connected ✓  backend is healthy.")
+                    else:
+                        st.error(f"Reached the server but got an unexpected response ({h.status_code}).")
+                except Exception as e:
+                    st.error(f"Could not reach backend: {e}")
+        st.caption("Demo mode returns a sample script instantly. Live mode calls your Colab GPU.")
+
     with st.form("create"):
         prompt = st.text_area(
             "Your pitch",
@@ -282,7 +316,11 @@ def page_create():
     # ---- the agents "argue" ----
     st.markdown('<div class="section-title">🗣️ The writers\' room is in session…</div>', unsafe_allow_html=True)
     with st.spinner("Writer drafting · Critic scoring · Refiner polishing…"):
-        result = call_backend(prompt)
+        try:
+            result = call_backend(prompt)
+        except Exception as e:
+            st.error(f"Backend error: {e}\n\nCheck the URL and that the Colab cells are running. Showing a demo result instead.")
+            result = mock_result(prompt)
 
     debate = st.container()
     for rnd in result["rounds"]:
