@@ -117,6 +117,9 @@ div[data-testid="collapsedControl"] { display: none; }
 .meta-row { display:flex; gap:26px; flex-wrap:wrap; margin: 4px 0 14px; }
 .meta-chip { color:#d9d2bb; font-size:0.92rem; }
 .meta-chip b { color: var(--gold-bright); }
+.insight { border-radius: 12px; padding: 12px 16px; margin: 6px 0 14px; font-size: 0.96rem; line-height:1.45; }
+.insight-sweet { background: rgba(120,200,120,0.10); border: 1px solid rgba(120,200,120,0.45); color: #d2f0d2; }
+.insight-high  { background: rgba(230,160,60,0.10);  border: 1px solid rgba(230,160,60,0.5);  color: #f2dcb0; }
 .badge-demo { position: fixed; top: 10px; right: 16px; z-index: 999;
   background: rgba(212,175,55,0.15); border:1px solid var(--gold); color: var(--gold-bright);
   padding: 3px 12px; border-radius: 999px; font-size: 0.72rem; letter-spacing:1px; }
@@ -156,6 +159,57 @@ def cast_grid(people):
     st.markdown(f'<div class="grid">{cards}</div>', unsafe_allow_html=True)
 
 
+# per-genre ROI sweet-spot caps (DEMO placeholders; live mode uses constraints["budget_insights"])
+GENRE_BUDGET_CAP = {
+    "Horror": 10_000_000, "Thriller": 25_000_000, "Comedy": 30_000_000,
+    "Drama": 20_000_000, "Romance": 20_000_000, "Mystery": 20_000_000,
+    "Crime": 30_000_000, "Family": 60_000_000, "Animation": 90_000_000,
+    "Science Fiction": 120_000_000, "Action": 150_000_000, "Fantasy": 150_000_000,
+}
+
+
+def _fmt_money(n):
+    if not n:
+        return "—"
+    if n >= 1_000_000_000:
+        return f"${n / 1_000_000_000:.2g}B"
+    if n >= 1_000_000:
+        return f"${n / 1_000_000:.0f}M"
+    if n >= 1_000:
+        return f"${n / 1_000:.0f}K"
+    return f"${n}"
+
+
+def _parse_budget(text):
+    """Extract a dollar budget: $50M, 50M$, 50 million, $50,000,000, 2B, 500k -> int dollars (or None)."""
+    t = text.lower().replace(",", "")
+    mults = {"billion": 1e9, "b": 1e9, "million": 1e6, "m": 1e6,
+             "mil": 1e6, "thousand": 1e3, "k": 1e3}
+    m = (re.search(r"\$\s*(\d+(?:\.\d+)?)\s*(billion|million|thousand|mil|b|m|k)?", t)        # $50m / $50000000
+         or re.search(r"(\d+(?:\.\d+)?)\s*(billion|million|thousand|mil|b|m|k)\b\s*\$?", t)   # 50m / 50 million / 50m$
+         or re.search(r"budget\D{0,12}(\d+(?:\.\d+)?)\s*(billion|million|thousand|mil|b|m|k)?", t))
+    if not m:
+        return None
+    val = float(m.group(1))
+    mult = mults.get(m.group(2) or "", 1)
+    if mult == 1 and val < 1000:        # "budget of 50" in film context = millions
+        mult = 1e6
+    return int(val * mult)
+
+
+def budget_insight(genre, budget):
+    if not budget:
+        return None
+    cap = GENRE_BUDGET_CAP.get(genre, 50_000_000)
+    if budget <= cap:
+        return {"verdict": "sweet",
+                "message": f"{_fmt_money(budget)} sits inside {genre}'s ROI sweet spot (≤ {_fmt_money(cap)}). "
+                           f"The data rewards lean {genre.lower()} budgets — strong return per dollar."}
+    return {"verdict": "high",
+            "message": f"{_fmt_money(budget)} is above {genre}'s ROI sweet spot (≤ {_fmt_money(cap)}). "
+                       f"Historically, leaner {genre.lower()} films return more per dollar — consider trimming scope."}
+
+
 def _light_parse(prompt: str):
     """Tiny local parse for the demo display only (the real parser runs on Colab)."""
     genres = ["Horror", "Action", "Comedy", "Drama", "Romance", "Thriller",
@@ -170,46 +224,111 @@ def _light_parse(prompt: str):
     seasons = {"summer": "June", "winter": "December", "spring": "April",
                "fall": "October", "autumn": "October", "halloween": "October", "christmas": "December"}
     window = next((mon for kw, mon in seasons.items() if kw in low), None)
-    return genre, window, length
+    budget = _parse_budget(prompt)
+    return genre, window, length, budget
+
+
+# genre-specific demo samples (only used in DEMO MODE; live mode comes from Colab)
+SAMPLES = {
+    "Science Fiction": {
+        "synopsis": ("Three centuries from Earth aboard a generation ship, the colony's only engineer wakes to find "
+                     "the navigation AI has quietly rewritten their destination. As oxygen dwindles and factions form, "
+                     "she must decide whether the machine is malfunctioning — or trying to save them from a truth the "
+                     "founders buried in the dark. A cerebral, white-knuckle descent into deep space where survival "
+                     "hinges on trusting something that no longer trusts humanity."),
+        "cast": [("Oscar Isaac", "Mission Commander"), ("Tessa Thompson", "Chief Engineer"),
+                 ("John Boyega", "The Navigator"), ("Sonoya Mizuno", "Voice of the AI")],
+        "directors": [("Denis Villeneuve", "Director"), ("Alex Garland", "Director")],
+    },
+    "Thriller": {
+        "synopsis": ("In a city that never forgives, a disgraced detective is pulled back for one last case when a string "
+                     "of impossible disappearances points to someone inside her own department. Every ally becomes a "
+                     "suspect and every clue a trap. She has until the first snow to expose the truth — before she "
+                     "becomes the next name on the list. A taut, twist-laden descent where trust is the deadliest currency."),
+        "cast": [("Frances McDormand", "Lead Detective"), ("Mahershala Ali", "Internal Affairs"),
+                 ("Florence Pugh", "The Rookie"), ("Oscar Isaac", "The Suspect")],
+        "directors": [("Denis Villeneuve", "Director"), ("Kathryn Bigelow", "Director")],
+    },
+    "Horror": {
+        "synopsis": ("In the dead of winter, a grieving family retreats to a remote lake house that refuses to let them "
+                     "mourn. Doors open onto rooms that shouldn't exist, and the youngest child begins speaking in a voice "
+                     "three generations dead. As the haunting tightens, they uncover a curse rooted in the house's drowned "
+                     "history — and realize the only way out is to give it what it has waited decades to claim."),
+        "cast": [("Toni Collette", "The Mother"), ("Mia Goth", "The Eldest"),
+                 ("Bill Skarsgård", "The Stranger"), ("Essie Davis", "The Medium")],
+        "directors": [("Ari Aster", "Director"), ("Jordan Peele", "Director")],
+    },
+    "Comedy": {
+        "synopsis": ("When a washed-up wedding band books the wrong venue — a billionaire's funeral — they have one "
+                     "disastrous afternoon to fake their way through the most somber gig of their lives without getting "
+                     "caught, arrested, or, strangely, falling for the grieving heir. A fast, warm-hearted farce about "
+                     "second chances and spectacularly bad timing."),
+        "cast": [("Tiffany Haddish", "Lead Singer"), ("Nick Kroll", "The Drummer"),
+                 ("Ayo Edebiri", "The Heir"), ("Sam Richardson", "The Manager")],
+        "directors": [("Taika Waititi", "Director"), ("Greta Gerwig", "Director")],
+    },
+    "Romance": {
+        "synopsis": ("A burned-out chef and a grieving florist keep colliding at a Sunday market neither wants to be at. "
+                     "Over one slow spring, their prickly banter softens into something that scares them both — until a "
+                     "secret from her past threatens the fragile thing they've built. A tender, sun-warmed romance about "
+                     "learning to bloom again after loss."),
+        "cast": [("Florence Pugh", "The Florist"), ("Dev Patel", "The Chef"),
+                 ("Gemma Chan", "The Sister"), ("Brian Cox", "The Mentor")],
+        "directors": [("Greta Gerwig", "Director"), ("Celine Song", "Director")],
+    },
+    "Action": {
+        "synopsis": ("A retired extraction specialist is dragged back for one last job when her old unit is framed for a "
+                     "bombing they didn't commit. From a neon Bangkok night to a freefall over the Andes, she races a "
+                     "ticking clock and a former partner turned hunter to expose the man who sold them out — before the "
+                     "world's intelligence agencies erase them all. Relentless, globe-spanning, and built on betrayal."),
+        "cast": [("Charlize Theron", "The Specialist"), ("Idris Elba", "The Hunter"),
+                 ("Daniel Kaluuya", "The Handler"), ("Michelle Yeoh", "The Broker")],
+        "directors": [("Chad Stahelski", "Director"), ("Kathryn Bigelow", "Director")],
+    },
+    "Fantasy": {
+        "synopsis": ("In a kingdom where memories trade like coin, a penniless thief steals the wrong recollection — the "
+                     "last memory of a dying queen — and finds an entire realm hunting her for it. To survive she must "
+                     "descend into the forbidden Vault of the Forgotten and decide whether some truths are worth more than "
+                     "a crown. A lush, myth-soaked adventure about what we lose to be remembered."),
+        "cast": [("Anya Taylor-Joy", "The Thief"), ("Dev Patel", "The Sorcerer"),
+                 ("Cynthia Erivo", "The Queen"), ("Pedro Pascal", "The Vault Keeper")],
+        "directors": [("Guillermo del Toro", "Director"), ("Denis Villeneuve", "Director")],
+    },
+    "_default": {
+        "synopsis": ("Three estranged siblings return to their childhood home to bury a father none of them forgave, only "
+                     "to learn he left the house to a stranger. Over one charged weekend of old wounds and buried letters, "
+                     "they must decide what they owe the dead — and each other. A quiet, devastating portrait of family, "
+                     "memory, and the price of silence."),
+        "cast": [("Mahershala Ali", "The Eldest"), ("Viola Davis", "The Sister"),
+                 ("Brian Tyree Henry", "The Youngest"), ("André Holland", "The Stranger")],
+        "directors": [("Barry Jenkins", "Director"), ("Kenneth Lonergan", "Director")],
+    },
+}
 
 
 def mock_result(prompt: str):
-    """Returns the exact response contract the FastAPI backend will produce."""
-    genre, window, length = _light_parse(prompt)
-    window = window or {"Horror": "January", "Thriller": "December",
-                        "Action": "May", "Comedy": "July"}.get(genre, "July")
-    final = (
-        f"In a city that never forgives, a disgraced detective is pulled back for one last case "
-        f"when a string of impossible disappearances points to someone inside her own department. "
-        f"As {genre.lower()} tension tightens, every ally becomes a suspect and every clue a trap. "
-        f"She has until the first snow to expose the truth — before she becomes the next name on the list. "
-        f"A taut, twist-laden descent where trust is the deadliest currency."
-    )
+    """Returns the exact response contract the FastAPI backend will produce (genre-aware demo)."""
+    genre, window, length, budget = _light_parse(prompt)
+    window = window or {"Horror": "January", "Thriller": "December", "Action": "May",
+                        "Comedy": "July", "Science Fiction": "July", "Romance": "February",
+                        "Fantasy": "December"}.get(genre, "July")
+    s = SAMPLES.get(genre, SAMPLES["_default"])
+    final = s["synopsis"]
+    sents = [x.strip() for x in final.split(". ") if x.strip()]
+    mid = ". ".join(sents[:2]) + "."
     rounds = [
-        {"n": 1, "agent": "Writer",
-         "score": 0.55, "failed": ["genre_signal", "length_ok"],
-         "excerpt": "A detective investigates some disappearances in a quiet town and slowly finds out the truth."},
-        {"n": 2, "agent": "Refiner",
-         "score": 0.75, "failed": ["length_ok"],
-         "excerpt": "A disgraced detective returns for a final case as impossible disappearances point inside her department..."},
-        {"n": 3, "agent": "Refiner",
-         "score": 0.9, "failed": [],
-         "excerpt": final},
+        {"n": 1, "agent": "Writer", "score": 0.55, "failed": ["genre_signal", "length_ok"],
+         "excerpt": f"A {genre.lower()} story where some characters face a problem and eventually resolve it."},
+        {"n": 2, "agent": "Refiner", "score": 0.75, "failed": ["length_ok"], "excerpt": mid},
+        {"n": 3, "agent": "Refiner", "score": 0.9, "failed": [], "excerpt": final},
     ]
     return {
         "genre": genre, "window": window, "length": length,
+        "budget": budget, "budget_insight": budget_insight(genre, budget),
         "synopsis": final, "score": 0.9, "iterations": 3, "valid": True,
         "rounds": rounds,
-        "cast": [
-            {"name": "Frances McDormand", "role": "Lead Detective"},
-            {"name": "Mahershala Ali", "role": "Internal Affairs"},
-            {"name": "Florence Pugh", "role": "The Rookie"},
-            {"name": "Oscar Isaac", "role": "The Suspect"},
-        ],
-        "directors": [
-            {"name": "Denis Villeneuve", "role": "Director"},
-            {"name": "Kathryn Bigelow", "role": "Director"},
-        ],
+        "cast": [{"name": n, "role": r} for n, r in s["cast"]],
+        "directors": [{"name": n, "role": r} for n, r in s["directors"]],
     }
 
 
@@ -340,16 +459,24 @@ def page_create():
 
     # ---- final script ----
     st.markdown('<div class="section-title">🏆 Final Synopsis</div>', unsafe_allow_html=True)
+    budget_chip = (f'<span class="meta-chip">Budget: <b>{_fmt_money(result["budget"])}</b></span>'
+                   if result.get("budget") else "")
     st.markdown(
         f'<div class="meta-row">'
         f'<span class="meta-chip">Genre: <b>{result["genre"]}</b></span>'
         f'<span class="meta-chip">Best window: <b>{result["window"]}</b></span>'
         f'<span class="meta-chip">Length: <b>~{result["length"]} words</b></span>'
+        f'{budget_chip}'
         f'<span class="meta-chip">Critic score: <b>{result["score"]:.2f}</b></span>'
         f'<span class="meta-chip">Iterations: <b>{result["iterations"]}</b></span>'
         "</div>",
         unsafe_allow_html=True,
     )
+    ins = result.get("budget_insight")
+    if ins:
+        cls = "insight-sweet" if ins["verdict"] == "sweet" else "insight-high"
+        icon = "✅" if ins["verdict"] == "sweet" else "⚠️"
+        st.markdown(f'<div class="insight {cls}">{icon} {ins["message"]}</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="script-panel">{result["synopsis"]}</div>', unsafe_allow_html=True)
 
     # ---- suggested cast + directors (glassmorphism) ----
