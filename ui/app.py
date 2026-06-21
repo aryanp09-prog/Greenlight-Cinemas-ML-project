@@ -346,6 +346,65 @@ SAMPLES = {
     },
 }
 
+# pools for the "recast" chat — every name here already has a face in faces.json
+ALL_ACTORS = sorted({c[0] for s in SAMPLES.values() for c in s["cast"]})
+ALL_DIRECTORS = sorted({d[0] for s in SAMPLES.values() for d in s["directors"]})
+_SWAP_WORDS = ("replace", "swap", "change", "instead", "remove", "don't", "do not",
+               "dont", "not a fan", "different", "someone else", "other", "recast")
+
+
+def _name_targets(people, msg):
+    """Match people by full name, spaceless name, or last-name token (handles typos/partials)."""
+    words = set(re.findall(r"[a-z]+", msg))
+    msg_ns = re.sub(r"[^a-z]", "", msg)
+    hits = []
+    for p in people:
+        nm = p["name"].lower()
+        toks = [t for t in re.findall(r"[a-z]+", nm) if len(t) >= 3]
+        nm_ns = re.sub(r"[^a-z]", "", nm)
+        if nm in msg or (nm_ns and nm_ns in msg_ns) or (toks and toks[-1] in words):
+            hits.append(p)
+    return hits
+
+
+def chat_respond(result, message):
+    """Deterministic recasting (works in demo, no GPU). Returns (reply, updated_result | None)."""
+    msg = message.lower()
+    rm_cast = _name_targets(result["cast"], msg)
+    rm_dirs = _name_targets(result["directors"], msg)
+    if (rm_cast or rm_dirs) and any(w in msg for w in _SWAP_WORDS):
+        new = json.loads(json.dumps(result))
+        retired = set(new.get("_retired", []))                       # never bring these back
+        used = {c["name"] for c in new["cast"]} | {d["name"] for d in new["directors"]} | retired
+        genre = result.get("genre", "")
+        same = [c[0] for c in SAMPLES.get(genre, SAMPLES["_default"])["cast"]]
+        a_pool = [a for a in same if a not in used] + [a for a in ALL_ACTORS if a not in used and a not in same]
+        d_pool = [d for d in ALL_DIRECTORS if d not in used]
+        swapped = []
+        for c in rm_cast:
+            if not a_pool:
+                break
+            repl = a_pool.pop(0); used.add(repl); retired.add(c["name"])
+            for i, cc in enumerate(new["cast"]):
+                if cc["name"] == c["name"]:
+                    new["cast"][i] = {"name": repl, "role": cc["role"]}
+            swapped.append(f"{c['name']} → {repl}")
+        for d in rm_dirs:
+            if not d_pool:
+                break
+            repl = d_pool.pop(0); used.add(repl); retired.add(d["name"])
+            for i, dd in enumerate(new["directors"]):
+                if dd["name"] == d["name"]:
+                    new["directors"][i] = {"name": repl, "role": dd["role"]}
+            swapped.append(f"{d['name']} → {repl}")
+        new["_retired"] = list(retired)
+        if swapped:
+            return ("Done — recast " + "; ".join(swapped) + ". Updated lineup below. 🎬"), new
+        return ("I've cycled through the fresh demo faces for this genre — "
+                "connect the live backend for the full talent pool."), None
+    return ("I can recast the lineup — try *\"replace Dev Patel with someone else\"*. "
+            "Rewriting the synopsis or changing tone needs the live backend (GPU)."), None
+
 
 def mock_result(prompt: str):
     """Returns the exact response contract the FastAPI backend will produce (genre-aware demo)."""
@@ -467,27 +526,29 @@ def page_create():
         )
         submitted = st.form_submit_button("🎬  Action!  Send to the writers' room")
 
-    if not submitted:
-        return
-    if not prompt.strip():
+    if submitted and prompt.strip():
+        with st.spinner("Writer drafting · Critic scoring · Refiner polishing…"):
+            try:
+                result = call_backend(prompt)
+            except Exception as e:
+                st.error(f"Backend error: {e}\n\nCheck the URL and that the Colab cells are running. Showing a demo result instead.")
+                result = mock_result(prompt)
+        st.session_state.result = result
+        st.session_state.chat = []
+    elif submitted:
         st.warning("Give the writers something to work with — type a pitch first.")
+
+    result = st.session_state.get("result")
+    if not result:
         return
 
-    # ---- the agents "argue" ----
-    st.markdown('<div class="section-title">🗣️ The writers\' room is in session…</div>', unsafe_allow_html=True)
-    with st.spinner("Writer drafting · Critic scoring · Refiner polishing…"):
-        try:
-            result = call_backend(prompt)
-        except Exception as e:
-            st.error(f"Backend error: {e}\n\nCheck the URL and that the Colab cells are running. Showing a demo result instead.")
-            result = mock_result(prompt)
-
-    debate = st.container()
+    # ---- the agents' debate ----
+    st.markdown('<div class="section-title">🗣️ Writers\' room debate</div>', unsafe_allow_html=True)
     for rnd in result["rounds"]:
         css = {"Writer": "b-writer", "Critic": "b-critic", "Refiner": "b-refiner"}.get(rnd["agent"], "b-writer")
         fails = "".join(f'<span class="fail-tag">✗ {f}</span>' for f in rnd["failed"]) or \
                 '<span class="fail-tag" style="background:rgba(120,200,120,.18);color:#bdf0bd;border-color:rgba(120,200,120,.4)">✓ all checks pass</span>'
-        debate.markdown(
+        st.markdown(
             f'<div class="bubble {css}">'
             f'<span class="agent-tag">{rnd["agent"]} · round {rnd["n"]}</span>'
             f'<span class="score-pill">score {rnd["score"]:.2f}</span>'
@@ -496,7 +557,6 @@ def page_create():
             "</div>",
             unsafe_allow_html=True,
         )
-        time.sleep(0.7)
 
     # ---- final script ----
     st.markdown('<div class="section-title">🏆 Final Synopsis</div>', unsafe_allow_html=True)
@@ -527,6 +587,22 @@ def page_create():
     st.write("")
     st.markdown('<div class="section-title">🎬 Suggested Directors</div>', unsafe_allow_html=True)
     cast_grid(result["directors"])
+
+    # ---- continue the conversation ----
+    st.write("")
+    st.markdown('<div class="section-title">💬 Continue the conversation</div>', unsafe_allow_html=True)
+    st.caption('Not happy with a choice? Ask for changes — e.g. "replace Dev Patel and Cynthia Erivo with someone else."')
+    for m in st.session_state.get("chat", []):
+        with st.chat_message(m["role"], avatar="🎬" if m["role"] == "assistant" else "🧑"):
+            st.markdown(m["content"])
+    user_msg = st.chat_input("Ask the writers' room to change something…")
+    if user_msg:
+        st.session_state.setdefault("chat", []).append({"role": "user", "content": user_msg})
+        reply, updated = chat_respond(st.session_state.result, user_msg)
+        if updated:
+            st.session_state.result = updated
+        st.session_state.chat.append({"role": "assistant", "content": reply})
+        st.rerun()
 
 
 def page_insights():
