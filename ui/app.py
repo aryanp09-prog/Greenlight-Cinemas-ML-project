@@ -113,6 +113,34 @@ div[data-testid="collapsedControl"] { display: none; }
             border-radius: 8px; padding: 1px 8px; font-size: 0.72rem; margin: 4px 4px 0 0; }
 .bubble-text { color:#e9e4d2; margin-top:8px; font-size: 0.95rem; line-height:1.45; }
 
+/* ---------- agent stations (premium glassmorphism, active-glow choreography) ---------- */
+.stations { display:flex; gap:16px; margin:6px 0 22px; }
+.station { position:relative; flex:1; text-align:center; padding:22px 14px 18px; border-radius:18px;
+  background: rgba(255,255,255,0.045);
+  backdrop-filter: blur(11px) saturate(140%); -webkit-backdrop-filter: blur(11px) saturate(140%);
+  border:1px solid rgba(212,175,55,0.22);
+  box-shadow: 0 8px 26px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.03);
+  transition: all .35s ease; }
+.station .ic { display:inline-flex; align-items:center; justify-content:center;
+  width:50px; height:50px; border-radius:50%; font-size:1.3rem; margin-bottom:11px;
+  background: rgba(212,175,55,0.10); border:1px solid rgba(212,175,55,0.30); transition: all .35s ease; }
+.station .lbl { font-weight:700; letter-spacing:2.5px; text-transform:uppercase; font-size:0.82rem; color:#b9ad82; }
+.station .st  { font-size:0.7rem; letter-spacing:.5px; margin-top:4px; color:#7d775f; }
+.station.active { border-color:var(--gold-bright); background:rgba(212,175,55,0.07);
+  box-shadow:0 0 0 1px rgba(255,215,0,0.45), 0 0 36px rgba(212,175,55,0.40); transform:translateY(-4px); }
+.station.active .ic  { background:var(--gold); color:#15110a; border-color:var(--gold-bright);
+  animation: glowpulse 1.2s ease-in-out infinite; }
+.station.active .lbl { color:var(--gold-bright); }
+.station.active .st  { color:var(--gold); }
+.station.done { border-color:rgba(120,200,120,0.38); }
+.station.done .ic  { background:rgba(120,200,120,0.14); border-color:rgba(120,200,120,0.5); }
+.station.done .lbl { color:#bcdfae; }
+.station.done .st  { color:#7fae7f; }
+@keyframes glowpulse {
+  0%,100% { box-shadow:0 0 8px rgba(212,175,55,0.45); transform:scale(1); }
+  50%     { box-shadow:0 0 24px 7px rgba(255,215,0,0.85); transform:scale(1.10); }
+}
+
 /* ---------- final script panel (NOT glass, per spec) ---------- */
 .script-panel {
   background: #0f0d07; border: 1px solid rgba(212,175,55,0.45); border-left: 4px solid var(--gold);
@@ -455,6 +483,39 @@ def chat_backend(message: str, result: dict):
 # ----------------------------------------------------------------------------
 # PAGES
 # ----------------------------------------------------------------------------
+STATIONS = [("✍️", "Writer", "drafting"), ("🔍", "Critic", "scoring"), ("✨", "Refiner", "polishing")]
+_ST_ORDER = ["Writer", "Critic", "Refiner"]
+
+
+def _stations_html(active=None, done_all=False):
+    ai = _ST_ORDER.index(active) if active in _ST_ORDER else -1
+    html = '<div class="stations">'
+    for i, (ic, name, verb) in enumerate(STATIONS):
+        if done_all:
+            cls, sub = "station done", "done ✓"
+        elif name == active:
+            cls, sub = "station active", verb + "…"
+        elif ai >= 0 and i < ai:
+            cls, sub = "station done", "done ✓"
+        else:
+            cls, sub = "station", "queued"
+        html += (f'<div class="{cls}"><span class="ic">{ic}</span>'
+                 f'<div class="lbl">{name}</div><div class="st">{sub}</div></div>')
+    return html + "</div>"
+
+
+def _agent_choreography(iterations=3):
+    """Move a gold glow Writer→Critic→Refiner→Critic per iteration, then settle green."""
+    seq = ["Writer", "Critic"]
+    for _ in range(max(0, int(iterations) - 1)):
+        seq += ["Refiner", "Critic"]
+    ph = st.empty()
+    for active in seq:
+        ph.markdown(_stations_html(active=active), unsafe_allow_html=True)
+        time.sleep(0.8)
+    ph.markdown(_stations_html(done_all=True), unsafe_allow_html=True)
+
+
 def page_home():
     st.markdown('<div class="hero-kicker">★ Data-Driven Cinema ★</div>', unsafe_allow_html=True)
     st.markdown('<div class="hero-title">Greenlight Cinema</div>', unsafe_allow_html=True)
@@ -544,6 +605,7 @@ def page_create():
                 result = mock_result(prompt)
         st.session_state.result = result
         st.session_state.chat = []
+        st.session_state.animate = True
     elif submitted:
         st.warning("Give the writers something to work with — type a pitch first.")
 
@@ -553,6 +615,10 @@ def page_create():
 
     # ---- the agents' debate ----
     st.markdown('<div class="section-title">🗣️ Writers\' room debate</div>', unsafe_allow_html=True)
+    if st.session_state.pop("animate", False):
+        _agent_choreography(result.get("iterations", 3))     # glow travels Writer→Critic→Refiner
+    else:
+        st.markdown(_stations_html(done_all=True), unsafe_allow_html=True)
     for rnd in result["rounds"]:
         css = {"Writer": "b-writer", "Critic": "b-critic", "Refiner": "b-refiner"}.get(rnd["agent"], "b-writer")
         fails = "".join(f'<span class="fail-tag">✗ {f}</span>' for f in rnd["failed"]) or \
