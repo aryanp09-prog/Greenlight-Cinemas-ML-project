@@ -443,6 +443,15 @@ def call_backend(prompt: str):
     return mock_result(prompt)
 
 
+def chat_backend(message: str, result: dict):
+    """Live-mode chat → Colab /chat (LLM synopsis edits + budget-aware recast). Returns (reply, updated)."""
+    url = st.session_state.get("backend_url", "").strip()
+    r = requests.post(f"{url}/chat", json={"message": message, "state": result}, timeout=REQUEST_TIMEOUT)
+    r.raise_for_status()
+    d = r.json()
+    return d.get("reply", ""), d.get("result")
+
+
 # ----------------------------------------------------------------------------
 # PAGES
 # ----------------------------------------------------------------------------
@@ -598,7 +607,14 @@ def page_create():
     user_msg = st.chat_input("Ask the writers' room to change something…")
     if user_msg:
         st.session_state.setdefault("chat", []).append({"role": "user", "content": user_msg})
-        reply, updated = chat_respond(st.session_state.result, user_msg)
+        if _live:                                    # live: backend handles recast + free-form edits
+            with st.spinner("The writers' room is revising…"):
+                try:
+                    reply, updated = chat_backend(user_msg, st.session_state.result)
+                except Exception as e:
+                    reply, updated = f"Backend error: {e}", None
+        else:                                        # demo: deterministic recast only
+            reply, updated = chat_respond(st.session_state.result, user_msg)
         if updated:
             st.session_state.result = updated
         st.session_state.chat.append({"role": "assistant", "content": reply})
