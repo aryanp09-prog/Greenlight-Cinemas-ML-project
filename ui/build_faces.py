@@ -86,6 +86,14 @@ def main():
                 nm = (x.get(field) or x.get("name")) if isinstance(x, dict) else x
                 if nm:
                     names.add(nm)
+        # the live cast/directors come from cast_by_genre_budget — ingest those too
+        for genre, tiers in c.get("cast_by_genre_budget", {}).items():
+            for tier, slot in tiers.items():
+                for who in ("actors", "directors"):
+                    for p in slot.get(who, []):
+                        nm = p.get("name") if isinstance(p, dict) else p
+                        if nm:
+                            names.add(nm)
         print(f"+ added real names from {sys.argv[1]}")
 
     out_path = os.path.join(os.path.dirname(__file__), "faces.json")

@@ -181,11 +181,29 @@ except Exception:
     _FACES = {}
 
 
+def _wiki_lookup(name):
+    """Live Wikipedia photo lookup for a name not in the cache (Wikimedia, unblocked in India)."""
+    try:
+        r = requests.get("https://en.wikipedia.org/api/rest_v1/page/summary/"
+                         + urllib.parse.quote(name.replace(" ", "_"), safe="_"),
+                         headers={"User-Agent": "GreenlightCinema/1.0 (student project)"}, timeout=6)
+        if r.status_code == 200:
+            src = (r.json().get("thumbnail") or {}).get("source")
+            if src:
+                return ("https:" + src) if src.startswith("//") else src
+    except Exception:
+        pass
+    return None
+
+
 def face(name: str) -> str:
-    """Real TMDB profile photo if ingested (ui/faces.json), else a stable placeholder."""
+    """faces.json → live Wikipedia (cached per session) → placeholder."""
     if _FACES.get(name):
         return _FACES[name]
-    return f"https://i.pravatar.cc/220?u={urllib.parse.quote(name)}"
+    cache = st.session_state.setdefault("_face_cache", {})
+    if name not in cache:
+        cache[name] = _wiki_lookup(name) or ""
+    return cache[name] or f"https://i.pravatar.cc/220?u={urllib.parse.quote(name)}"
 
 
 def cast_grid(people):
@@ -557,14 +575,14 @@ def _stations_html(active=None, done_all=False):
 
 
 def _agent_choreography(iterations=3):
-    """Move a gold glow Writer→Critic→Refiner→Critic per iteration, then settle green."""
-    seq = ["Writer", "Critic"]
+    """Always one full Writer→Critic→Refiner pass (+ a Critic→Refiner per extra iteration), then settle green."""
+    seq = ["Writer", "Critic", "Refiner"]
     for _ in range(max(0, int(iterations) - 1)):
-        seq += ["Refiner", "Critic"]
+        seq += ["Critic", "Refiner"]
     ph = st.empty()
     for active in seq:
         ph.markdown(_stations_html(active=active), unsafe_allow_html=True)
-        time.sleep(0.8)
+        time.sleep(0.9)
     ph.markdown(_stations_html(done_all=True), unsafe_allow_html=True)
 
 
