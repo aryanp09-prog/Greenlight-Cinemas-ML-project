@@ -15,6 +15,8 @@ import os
 import json
 import urllib.parse
 import requests
+import pandas as pd
+import altair as alt
 import streamlit as st
 
 # ----------------------------------------------------------------------------
@@ -527,6 +529,82 @@ def page_create():
     cast_grid(result["directors"])
 
 
+def page_insights():
+    band_keys = [k for k, _ in BAND_DEFS]
+    band_x = [BAND_DISP[k] for k in band_keys]
+
+    st.markdown('<div class="hero-kicker">★ The Data Behind the Magic ★</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero-title" style="font-size:3rem;">Data Insights</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="hero-sub">Every release window, budget verdict, and cast suggestion in the '
+        'generator traces back to this analysis of <b>6,444 ROI-positive films</b>.</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="gold-rule"></div>', unsafe_allow_html=True)
+
+    # ---- the valley chart ----
+    st.markdown('<div class="section-title">📉 The Mid-Budget Valley</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="meta-chip">Median ROI by budget band. Notice the dip in the middle — '
+        'big enough to be expensive, not big enough to be an event. ROI recovers only at tentpole scale.</div>',
+        unsafe_allow_html=True,
+    )
+    genres = st.multiselect("Genres to compare", list(GENRE_BANDS.keys()),
+                            default=["Science Fiction", "Thriller", "Drama", "Action"])
+    if genres:
+        long = [{"Budget band": band_x[i], "Median ROI": GENRE_BANDS[g][k][0], "Genre": g}
+                for g in genres for i, k in enumerate(band_keys)]
+        chart = (alt.Chart(pd.DataFrame(long))
+                 .mark_line(point=True, strokeWidth=3)
+                 .encode(
+                     x=alt.X("Budget band:N", sort=band_x, title="Budget band"),
+                     y=alt.Y("Median ROI:Q", title="Median ROI (×)"),
+                     color=alt.Color("Genre:N", legend=alt.Legend(title="Genre")),
+                     tooltip=["Genre", "Budget band", "Median ROI"])
+                 .properties(height=360))
+        st.altair_chart(chart, use_container_width=True)
+    else:
+        st.info("Pick at least one genre to see its ROI curve.")
+
+    # ---- per-genre band breakdown ----
+    st.write("")
+    st.markdown('<div class="section-title">🎬 Budget breakdown by genre</div>', unsafe_allow_html=True)
+    g = st.selectbox("Pick a genre", list(GENRE_BANDS.keys()),
+                     index=list(GENRE_BANDS.keys()).index("Horror"))
+    rows = ""
+    for k, x in zip(band_keys, band_x):
+        roi, n = GENRE_BANDS[g][k]
+        cls = "insight-strong" if roi >= 2.5 else ("insight-solid" if roi >= 2.0 else "insight-weak")
+        rows += (f'<div class="insight {cls}" style="margin:6px 0;">{x} &nbsp;→&nbsp; median ROI '
+                 f'<b>{roi}×</b> <span style="opacity:.6">(n={n})</span></div>')
+    st.markdown(rows, unsafe_allow_html=True)
+
+    # ---- peak vs valley summary ----
+    st.write("")
+    st.markdown('<div class="section-title">🏆 Peak vs. valley, every genre</div>', unsafe_allow_html=True)
+    disp = dict(zip(band_keys, band_x))
+    cells = ""
+    for gn in GENRE_BANDS:
+        b = GENRE_BANDS[gn]
+        peak = max(band_keys, key=lambda k: b[k][0])
+        valley = min(band_keys, key=lambda k: b[k][0])
+        cells += (f'<tr>'
+                  f'<td style="padding:6px 16px;color:#f0e0b0;">{gn}</td>'
+                  f'<td style="padding:6px 16px;color:#9fe09f;">{disp[peak]} ({b[peak][0]}×)</td>'
+                  f'<td style="padding:6px 16px;color:#f0a0a0;">{disp[valley]} ({b[valley][0]}×)</td>'
+                  f'</tr>')
+    st.markdown(
+        '<table style="border-collapse:collapse;">'
+        '<tr><th style="text-align:left;padding:6px 16px;color:#D4AF37;">Genre</th>'
+        '<th style="text-align:left;padding:6px 16px;color:#D4AF37;">Best band</th>'
+        '<th style="text-align:left;padding:6px 16px;color:#D4AF37;">Worst band</th></tr>'
+        f'{cells}</table>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Source: median revenue/budget over films with budget ≥ $100K, joined to genre. "
+               "The generator's budget verdict reads these same numbers live.")
+
+
 # ----------------------------------------------------------------------------
 # NAV
 # ----------------------------------------------------------------------------
@@ -534,7 +612,7 @@ if "page" not in st.session_state:
     st.session_state.page = "Home"
 
 # ---- top navigation bar ----
-logo_col, nav_home, nav_create = st.columns([6, 1.1, 1.6])
+logo_col, nav_home, nav_create, nav_insights = st.columns([5, 1.0, 1.5, 1.2])
 with logo_col:
     st.markdown('<div class="topbar-logo">🎬 Greenlight</div>'
                 '<div class="topbar-tag">Oscar-grade synopses, on demand.</div>',
@@ -549,9 +627,16 @@ with nav_create:
                  type="primary" if st.session_state.page == "Create Project" else "secondary"):
         st.session_state.page = "Create Project"
         st.rerun()
+with nav_insights:
+    if st.button("Data Insights", use_container_width=True,
+                 type="primary" if st.session_state.page == "Insights" else "secondary"):
+        st.session_state.page = "Insights"
+        st.rerun()
 st.markdown('<div class="nav-divider"></div>', unsafe_allow_html=True)
 
 if st.session_state.page == "Home":
     page_home()
-else:
+elif st.session_state.page == "Create Project":
     page_create()
+else:
+    page_insights()
