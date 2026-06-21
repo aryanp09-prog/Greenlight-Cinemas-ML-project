@@ -524,6 +524,14 @@ def chat_backend(message: str, result: dict):
     return d.get("reply", ""), d.get("result")
 
 
+def ask_backend(question: str):
+    """Live-mode data Q&A → Colab /ask (text-to-SQL over the full database)."""
+    url = st.session_state.get("backend_url", "").strip()
+    r = requests.post(f"{url}/ask", json={"question": question}, timeout=REQUEST_TIMEOUT)
+    r.raise_for_status()
+    return r.json()
+
+
 # ----------------------------------------------------------------------------
 # PAGES
 # ----------------------------------------------------------------------------
@@ -558,6 +566,117 @@ def _agent_choreography(iterations=3):
         ph.markdown(_stations_html(active=active), unsafe_allow_html=True)
         time.sleep(0.8)
     ph.markdown(_stations_html(done_all=True), unsafe_allow_html=True)
+
+
+def _genres_in(q):
+    ql = q.lower()
+    found = [g for g in GENRE_BANDS if g.lower() in ql]
+    if any(k in ql for k in ("sci-fi", "scifi", "sci fi")) and "Science Fiction" not in found:
+        found.append("Science Fiction")
+    return found
+
+
+def _bands_df(genres):
+    keys = [k for k, _ in BAND_DEFS]
+    return pd.DataFrame([{"Budget band": BAND_DISP[k], "Median ROI": GENRE_BANDS[g][k][0], "Genre": g}
+                         for g in genres for k in keys])
+
+
+def insight_answer(q):
+    """Deterministic budget/genre/ROI analyst over the real band data. No GPU, no DB."""
+    ql = q.lower()
+    keys = [k for k, _ in BAND_DEFS]
+    gs = _genres_in(q)
+
+    if (re.search(r"\b(19|20)\d{2}\b", ql)
+            or any(w in ql for w in ["actor", "actress", "director", "cast", "over the year",
+                                     "per year", "by year", "each year", "trend"])
+            or ("compare" in ql and len(gs) < 2)):
+        return {"needs_live": True,
+                "text": "📡 Actor, director, and year-by-year questions read the **full film database** "
+                        "(on the live backend). Switch on **Use live backend** to ask those. Right now I can "
+                        "answer **budget & genre ROI** questions — try the chips below."}
+
+    if len(gs) >= 2:
+        return {"text": f"Median ROI across budget bands — {', '.join(gs)}:",
+                "df": _bands_df(gs), "chart": "line", "x": "Budget band", "y": "Median ROI", "series": "Genre"}
+
+    if len(gs) == 1:
+        g = gs[0]; b = GENRE_BANDS[g]
+        peak = max(keys, key=lambda k: b[k][0])
+        safe = [k for k in keys if b[k][0] >= 2.0]
+        upto = BAND_DISP[safe[-1]] if safe else BAND_DISP[peak]
+        return {"text": f"**{g}** peaks at **{b[peak][0]}×** in the {BAND_DISP[peak]} band, and stays profitable "
+                        f"(≥2× median ROI) up to the **{upto}** band.",
+                "df": _bands_df([g]), "chart": "line", "x": "Budget band", "y": "Median ROI", "series": "Genre"}
+
+    if any(w in ql for w in ["low budget", "lowest budget", "cheap", "value", "small budget",
+                             "least budget", "high roi at low", "low-budget", "lean"]):
+        ranked = sorted(GENRE_BANDS, key=lambda g: GENRE_BANDS[g]["1-10M"][0], reverse=True)
+        top = ranked[0]; b = GENRE_BANDS[top]
+        safe = [k for k in keys if b[k][0] >= 2.0]
+        upto = BAND_DISP[safe[-1]] if safe else BAND_DISP["1-10M"]
+        names = ", ".join(f"{g} ({GENRE_BANDS[g]['1-10M'][0]}×)" for g in ranked[:3])
+        df = pd.DataFrame([{"Genre": g, "ROI @ $1-10M": GENRE_BANDS[g]["1-10M"][0]} for g in ranked])
+        return {"text": f"Best returns at low budget ($1–10M): **{names}**. **{top}** stays strong up to the "
+                        f"**{upto}** band — that's how far you can scale before ROI thins out.",
+                "df": df, "chart": "bar", "x": "Genre", "y": "ROI @ $1-10M", "series": None}
+
+    if any(w in ql for w in ["top genre", "best genre", "highest roi", "most profitable", "top roi",
+                             "which genre", "most demanding", "rank", "biggest roi"]):
+        peak = {g: max(keys, key=lambda k: GENRE_BANDS[g][k][0]) for g in GENRE_BANDS}
+        ranked = sorted(GENRE_BANDS, key=lambda g: GENRE_BANDS[g][peak[g]][0], reverse=True)
+        names = ", ".join(f"{g} ({GENRE_BANDS[g][peak[g]][0]}× in {BAND_DISP[peak[g]]})" for g in ranked[:3])
+        df = pd.DataFrame([{"Genre": g, "Peak ROI": GENRE_BANDS[g][peak[g]][0]} for g in ranked])
+        return {"text": f"Top genres by peak median ROI: **{names}**.",
+                "df": df, "chart": "bar", "x": "Genre", "y": "Peak ROI", "series": None}
+
+    if any(w in ql for w in ["avoid", "worst", "valley", "risky", "lose", "mid budget", "mid-budget", "danger"]):
+        valley = {g: min(keys, key=lambda k: GENRE_BANDS[g][k][0]) for g in GENRE_BANDS}
+        df = pd.DataFrame([{"Genre": g, "Worst-band ROI": GENRE_BANDS[g][valley[g]][0]}
+                           for g in sorted(GENRE_BANDS, key=lambda g: GENRE_BANDS[g][valley[g]][0])])
+        worst = df.iloc[0]
+        return {"text": f"The **mid-budget valley ($10–100M)** is where ROI sags. Riskiest: "
+                        f"**{worst['Genre']}** bottoms at **{worst['Worst-band ROI']}×**. "
+                        f"Go lean indie or full tentpole — avoid the middle.",
+                "df": df, "chart": "bar", "x": "Genre", "y": "Worst-band ROI", "series": None}
+
+    return {"text": "I answer **budget & genre ROI** questions from the data. Try: "
+                    "*“which genre gives high ROI at low budget?”*, *“top genres by ROI”*, "
+                    "*“compare Horror and Sci-Fi”*, *“which budgets to avoid?”*  "
+                    "(Actor & year questions need live mode.)"}
+
+
+def _render_insight(ans):
+    if ans.get("error"):
+        st.warning(ans["error"]); return
+    if ans.get("text"):
+        st.markdown(f'<div class="insight insight-solid">🤖 {ans["text"]}</div>', unsafe_allow_html=True)
+    if ans.get("title"):
+        st.markdown(f"**{ans['title']}**")
+    df = ans.get("df")
+    if df is None and ans.get("rows") is not None:
+        df = pd.DataFrame(ans["rows"])
+    if df is not None and len(df):
+        chart, x, y, series = ans.get("chart"), ans.get("x"), ans.get("y"), ans.get("series")
+        try:
+            if chart == "line" and x in df.columns and y in df.columns:
+                xsort = [BAND_DISP[k] for k, _ in BAND_DEFS] if "band" in x.lower() else "ascending"
+                enc = alt.Chart(df).mark_line(point=True, strokeWidth=3).encode(
+                    x=alt.X(f"{x}:N", sort=xsort, title=x), y=alt.Y(f"{y}:Q", title=y),
+                    **({"color": f"{series}:N"} if series else {}))
+                st.altair_chart(enc, use_container_width=True)
+            elif chart == "bar" and x in df.columns and y in df.columns:
+                enc = alt.Chart(df).mark_bar().encode(
+                    x=alt.X(f"{x}:N", sort="-y", title=x), y=alt.Y(f"{y}:Q", title=y),
+                    color=alt.Color(f"{x}:N", legend=None))
+                st.altair_chart(enc, use_container_width=True)
+        except Exception:
+            pass
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    if ans.get("sql"):
+        with st.expander("Query the assistant ran"):
+            st.code(ans["sql"], language="sql")
 
 
 def page_home():
@@ -815,6 +934,31 @@ def page_insights():
     )
     st.caption("Source: median revenue/budget over films with budget ≥ $100K, joined to genre. "
                "The generator's budget verdict reads these same numbers live.")
+
+    # ---- AI assistant ----
+    st.write("")
+    st.markdown('<div class="section-title">🤖 Ask the Data</div>', unsafe_allow_html=True)
+    st.caption("Budget, genre & ROI questions are answered straight from the data. "
+               "Actor & year questions unlock in live mode.")
+    chips = ["Which genre gives high ROI at low budget?", "Top genres by ROI",
+             "Compare Horror and Science Fiction", "Which budgets to avoid?"]
+    cols = st.columns(len(chips))
+    picked = None
+    for i, ch in enumerate(chips):
+        if cols[i].button(ch, key=f"ask_chip_{i}", use_container_width=True):
+            picked = ch
+    typed = st.text_input("Ask the data…", key="ask_box",
+                          placeholder="e.g. which genre gives high ROI at low budget?")
+    q = picked or (typed.strip() if typed else "")
+    if q:
+        ans = insight_answer(q)
+        if ans.get("needs_live") and st.session_state.get("use_live") and st.session_state.get("backend_url", "").strip():
+            with st.spinner("Querying the live database…"):
+                try:
+                    ans = ask_backend(q)
+                except Exception as e:
+                    ans = {"error": f"Live query failed: {e}"}
+        _render_insight(ans)
 
 
 # ----------------------------------------------------------------------------
