@@ -18,6 +18,7 @@ import requests
 import pandas as pd
 import altair as alt
 import streamlit as st
+import streamlit.components.v1 as components
 
 # ----------------------------------------------------------------------------
 # CONFIG
@@ -395,14 +396,53 @@ def _name_targets(people, msg):
     return hits
 
 
+# demo-only alternate synopses, so a "change the synopsis" request shows a real change offline
+ALT_SYNOPSIS = {
+    "Science Fiction": ("A darker cut: the engineer realizes the AI isn't malfunctioning — it's grieving the crew it "
+                        "already lost on a previous, erased voyage. To break the loop she must let the machine mourn, "
+                        "even if that means letting them all drift into the dark."),
+    "Thriller": ("A sharper angle: the disappearances are her own cold cases resurfacing one by one — and the pattern "
+                 "spells out her name. The hunter is now the hunted, and the clock is a countdown only she can read."),
+    "Horror": ("A bleaker telling: the lake house isn't haunted — it's hungry, and the family was invited. Every comfort "
+               "it offers is a tooth, and the only way out is to feed it one of their own before dawn."),
+    "Comedy": ("A wilder spin: the band fakes being the deceased's secret favorite act, and the eulogy becomes the gig "
+               "of their lives — complete with a conga line nobody asked for and an heir who finally laughs again."),
+    "Romance": ("A tenderer version: the chef and florist agree to one fake date to survive a wedding, and spend the whole "
+                "night pretending so well that the pretending quietly stops being pretend."),
+    "Action": ("A leaner cut: one night, one city, six hours to pull her framed partner out before sunrise turns him into "
+               "a headline. No backup, no rules, no second shot."),
+    "Fantasy": ("A grander myth: the stolen memory is a key and the thief is the lock — she alone can open the Vault, "
+                "because the dying queen's last thought was of her. To save the realm she must remember a life that was "
+                "never hers."),
+    "_default": ("A quieter version: the siblings agree to spend one last night in the house before signing it away, and "
+                 "in the dark, over their father's old records, they finally say the things they couldn't while he lived."),
+}
+_SYN_EDIT_WORDS = ("synopsis", "story", "plot", "rewrite", "re-write", "darker", "lighter", "funnier",
+                   "scarier", "sadder", "happier", "shorter", "longer", "tone", "ending", "twist",
+                   "make it", "change it", "different", "setting", "set it", "mood", "grittier", "edgier")
+
+
+def _demo_revise(result):
+    new = json.loads(json.dumps(result))
+    genre = result.get("genre", "")
+    primary = SAMPLES.get(genre, SAMPLES["_default"])["synopsis"]
+    alt = ALT_SYNOPSIS.get(genre, ALT_SYNOPSIS["_default"])
+    cur = (new.get("synopsis") or "").strip()
+    new["synopsis"] = alt if cur == primary.strip() else primary       # toggle primary <-> alt take
+    rounds = new.get("rounds", [])
+    rounds.append({"n": len(rounds) + 1, "agent": "Refiner", "score": 0.9, "failed": [], "excerpt": new["synopsis"]})
+    new["rounds"] = rounds
+    return new
+
+
 def chat_respond(result, message):
-    """Deterministic recasting (works in demo, no GPU). Returns (reply, updated_result | None)."""
+    """Demo chat: recasting + (toggled) synopsis revision. Returns (reply, updated | None, animate)."""
     msg = message.lower()
     rm_cast = _name_targets(result["cast"], msg)
     rm_dirs = _name_targets(result["directors"], msg)
-    if (rm_cast or rm_dirs) and any(w in msg for w in _SWAP_WORDS):
+    if (rm_cast or rm_dirs) and any(w in msg for w in _SWAP_WORDS):       # ---- recast (instant)
         new = json.loads(json.dumps(result))
-        retired = set(new.get("_retired", []))                       # never bring these back
+        retired = set(new.get("_retired", []))
         used = {c["name"] for c in new["cast"]} | {d["name"] for d in new["directors"]} | retired
         genre = result.get("genre", "")
         same = [c[0] for c in SAMPLES.get(genre, SAMPLES["_default"])["cast"]]
@@ -427,11 +467,15 @@ def chat_respond(result, message):
             swapped.append(f"{d['name']} → {repl}")
         new["_retired"] = list(retired)
         if swapped:
-            return ("Done — recast " + "; ".join(swapped) + ". Updated lineup below. 🎬"), new
+            return ("Done — recast " + "; ".join(swapped) + ". Updated lineup below. 🎬"), new, False
         return ("I've cycled through the fresh demo faces for this genre — "
-                "connect the live backend for the full talent pool."), None
-    return ("I can recast the lineup — try *\"replace Dev Patel with someone else\"*. "
-            "Rewriting the synopsis or changing tone needs the live backend (GPU)."), None
+                "connect the live backend for the full talent pool."), None, False
+    if any(w in msg for w in _SYN_EDIT_WORDS):                            # ---- synopsis revision (re-animate)
+        revised = _demo_revise(result)
+        return ("Back to the writers' room — the Refiner reworked the synopsis. "
+                "(Demo shows an alternate take; live mode rewrites it freely with the LLM.)"), revised, True
+    return ("Tell me what to change — recast (\"replace Dev Patel\") or revise the synopsis "
+            "(\"make it darker\", \"change the ending\")."), None, False
 
 
 def mock_result(prompt: str):
@@ -613,10 +657,13 @@ def page_create():
     if not result:
         return
 
+    if st.session_state.pop("scroll_top", False):            # jump up so the replay is visible
+        components.html("<script>window.parent.scrollTo({top:0,behavior:'smooth'});</script>", height=0)
+
     # ---- the agents' debate ----
     st.markdown('<div class="section-title">🗣️ Writers\' room debate</div>', unsafe_allow_html=True)
     if st.session_state.pop("animate", False):
-        _agent_choreography(result.get("iterations", 3))     # glow travels Writer→Critic→Refiner
+        _agent_choreography(min(int(result.get("iterations", 3)), 3))     # glow travels Writer→Critic→Refiner
     else:
         st.markdown(_stations_html(done_all=True), unsafe_allow_html=True)
     for rnd in result["rounds"]:
@@ -673,16 +720,23 @@ def page_create():
     user_msg = st.chat_input("Ask the writers' room to change something…")
     if user_msg:
         st.session_state.setdefault("chat", []).append({"role": "user", "content": user_msg})
+        prev_syn = (st.session_state.result or {}).get("synopsis")
+        animate = False
         if _live:                                    # live: backend handles recast + free-form edits
             with st.spinner("The writers' room is revising…"):
                 try:
                     reply, updated = chat_backend(user_msg, st.session_state.result)
                 except Exception as e:
                     reply, updated = f"Backend error: {e}", None
-        else:                                        # demo: deterministic recast only
-            reply, updated = chat_respond(st.session_state.result, user_msg)
+            if updated and updated.get("synopsis") != prev_syn:
+                animate = True                       # synopsis was rewritten → replay the room
+        else:                                        # demo: recast + toggled synopsis revision
+            reply, updated, animate = chat_respond(st.session_state.result, user_msg)
         if updated:
             st.session_state.result = updated
+        if animate:
+            st.session_state.animate = True
+            st.session_state.scroll_top = True
         st.session_state.chat.append({"role": "assistant", "content": reply})
         st.rerun()
 
