@@ -25,6 +25,25 @@ def _match_genre(text):
     return None
 
 
+_PREMISE_TRIGGERS = ("where ", "about ", "in which ", "story of ", "involving ",
+                     "featuring ", "following ", "centered on ", "centred on ",
+                     "premise:", "plot:")
+
+
+def _premise_fallback(text):
+    """If the LLM didn't isolate the user's plot, grab the clause after a trigger
+    word ('...$100M where two robots are made...' -> 'two robots are made...').
+    Deterministic backstop so an obvious premise is never lost."""
+    t = (text or "").strip()
+    low = t.lower()
+    best, bestpos = None, len(t) + 1
+    for k in _PREMISE_TRIGGERS:
+        i = low.find(k)
+        if i != -1 and i < bestpos:
+            bestpos, best = i, t[i + len(k):].strip(" .,:")
+    return best or None
+
+
 def _parse_budget(text):
     """$50M, 50M$, 50 million, $50,000,000, 2B, 500k -> int dollars (or None)."""
     t = (text or "").lower().replace(",", "")
@@ -55,7 +74,16 @@ def _normalize(data, text):                          # deterministic guardrails 
     if lm: length = int(lm.group(1))
     if not isinstance(length, int) or not (30 <= length <= 600): length = 80
     budget = _parse_budget(text)                     # number in text wins
-    return {"genre": genre, "window": window, "length": length, "budget": budget}
+    premise = data.get("premise")                    # the user's specific plot, if any
+    if isinstance(premise, str):
+        premise = premise.strip()
+        if premise.lower() in ("", "null", "none", "n/a"): premise = None
+    else:
+        premise = None
+    if not premise:
+        premise = _premise_fallback(text)
+    return {"genre": genre, "window": window, "length": length,
+            "budget": budget, "premise": premise}
 
 
 def parse_prompt(text, call_llm=None):
@@ -66,10 +94,13 @@ def parse_prompt(text, call_llm=None):
     rely entirely on the deterministic guardrails over the raw text.
     """
     schema = ('{"genre":"<one genre>","window":"<month/season, or null>",'
-              '"length":<int or null>,"budget":<int dollars or null>}')
+              '"length":<int or null>,"budget":<int dollars or null>,'
+              '"premise":"<the specific plot/characters the user describes, or null>"}')
     prompt = (f"Extract fields from this film request. Reply ONLY JSON: {schema}\n"
               f"Allowed genres: {', '.join(KNOWN_GENRES)}.\n"
               f"If they say 'best release window' or give no timing, window=null.\n"
+              f"Put any specific story the user describes (characters, what happens) into "
+              f"premise; if they only name a genre with no plot, premise=null.\n"
               f"Request: {text}")
     data = {}
     if call_llm is not None:

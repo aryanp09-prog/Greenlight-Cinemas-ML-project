@@ -28,7 +28,7 @@ BACKEND_URL = ""                 # e.g. "https://xxxx.trycloudflare.com"
 REQUEST_TIMEOUT = 180
 
 st.set_page_config(page_title="Greenlight Cinema", page_icon="🎬",
-                   layout="wide", initial_sidebar_state="collapsed")
+                   layout="wide", initial_sidebar_state="expanded")
 
 # ----------------------------------------------------------------------------
 # THEME  (whole site = gold/black; ONLY the cast/director boxes = glassmorphism)
@@ -43,9 +43,22 @@ CSS = """
 }
 header[data-testid="stHeader"] { background: transparent; }
 #MainMenu, footer { visibility: hidden; }
-section[data-testid="stSidebar"] { display: none; }
-div[data-testid="collapsedControl"] { display: none; }
 .block-container { padding-top: 2.2rem; }
+
+/* ---------- left-side Session History panel (native sidebar, collapsible) ---------- */
+section[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, #0d0b06 0%, #080706 100%);
+  border-right: 1px solid rgba(212,175,55,0.25);
+}
+section[data-testid="stSidebar"] * { color: #e9e4d2; }
+section[data-testid="stSidebar"] .stButton > button {
+  background: rgba(212,175,55,0.06) !important; color: #f0e6c8 !important;
+  border: 1px solid rgba(212,175,55,0.22) !important; box-shadow: none !important;
+  text-align: left !important; font-weight: 600; border-radius: 10px;
+  padding: 0.5rem 0.7rem; white-space: normal; line-height: 1.25;
+}
+section[data-testid="stSidebar"] .stButton > button:hover { background: rgba(212,175,55,0.16) !important; }
+.hist-active button { border-color: var(--gold-bright) !important; background: rgba(212,175,55,0.16) !important; }
 
 /* ---------- top navigation bar ---------- */
 .topbar-logo { font-size: 1.7rem; font-weight: 800; color: var(--gold-bright); margin-top: 6px; }
@@ -166,6 +179,10 @@ if "backend_url" not in st.session_state:
     st.session_state.backend_url = BACKEND_URL
 if "use_live" not in st.session_state:
     st.session_state.use_live = (not DEMO_MODE) and bool(BACKEND_URL)
+if "history" not in st.session_state:        # left-side Session History panel
+    st.session_state.history = []
+if "active_idx" not in st.session_state:
+    st.session_state.active_idx = None
 
 _live = st.session_state.use_live and bool(st.session_state.backend_url.strip())
 st.markdown(f'<div class="badge-demo">{"● LIVE" if _live else "DEMO MODE"}</div>', unsafe_allow_html=True)
@@ -787,6 +804,14 @@ def page_create():
         st.session_state.result = result
         st.session_state.chat = []
         st.session_state.animate = True
+        st.session_state.history.append({            # log into the left-side history panel
+            "prompt": prompt.strip(),
+            "genre": result.get("genre", "?"),
+            "score": result.get("score"),
+            "result": json.loads(json.dumps(result)),
+            "chat": [],
+        })
+        st.session_state.active_idx = len(st.session_state.history) - 1
     elif submitted:
         st.warning("Give the writers something to work with — type a pitch first.")
 
@@ -875,6 +900,11 @@ def page_create():
             st.session_state.animate = True
             st.session_state.scroll_top = True
         st.session_state.chat.append({"role": "assistant", "content": reply})
+        ai = st.session_state.get("active_idx")          # keep this project's history entry current
+        if ai is not None and 0 <= ai < len(st.session_state.history):
+            st.session_state.history[ai]["result"] = json.loads(json.dumps(st.session_state.result))
+            st.session_state.history[ai]["chat"] = list(st.session_state.chat)
+            st.session_state.history[ai]["score"] = st.session_state.result.get("score")
         st.rerun()
 
 
@@ -980,13 +1010,54 @@ def page_insights():
 
 
 # ----------------------------------------------------------------------------
-# NAV
+# LEFT-SIDE SESSION HISTORY  (collapsible native sidebar)
 # ----------------------------------------------------------------------------
+def render_history_sidebar():
+    with st.sidebar:
+        st.markdown('<div class="topbar-logo" style="font-size:1.2rem;margin-top:0;">📜 Session History</div>'
+                    '<div class="topbar-tag">Every project you generate this session</div>',
+                    unsafe_allow_html=True)
+        st.markdown('<div class="nav-divider"></div>', unsafe_allow_html=True)
+        hist = st.session_state.get("history", [])
+        if not hist:
+            st.caption("No projects yet — generate one in **Create Project** and it'll appear here. "
+                       "Click any entry to reopen it with its chat.")
+            return
+        for i in reversed(range(len(hist))):
+            h = hist[i]
+            active = (i == st.session_state.get("active_idx"))
+            sc = h.get("score")
+            sc_txt = f" · {sc:.2f}" if isinstance(sc, (int, float)) else ""
+            chat_n = len(h.get("chat", []))
+            chat_txt = f" · 💬{chat_n}" if chat_n else ""
+            label = f"{'▸ ' if active else ''}🎬 {h.get('genre','?')}{sc_txt}{chat_txt}\n{h.get('prompt','')[:52]}"
+            if active:
+                st.markdown('<div class="hist-active">', unsafe_allow_html=True)
+            if st.button(label, key=f"hist_{i}", use_container_width=True):
+                st.session_state.result = json.loads(json.dumps(h["result"]))
+                st.session_state.chat = list(h.get("chat", []))
+                st.session_state.active_idx = i
+                st.session_state.page = "Create Project"
+                st.session_state.animate = False        # reopen instantly (no replay)
+                st.rerun()
+            if active:
+                st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="nav-divider"></div>', unsafe_allow_html=True)
+        if st.button("🗑️  Clear history", key="hist_clear", use_container_width=True):
+            st.session_state.history = []
+            st.session_state.active_idx = None
+            st.rerun()
+
+
 if "page" not in st.session_state:
     st.session_state.page = "Home"
 
+# ----------------------------------------------------------------------------
+# NAV
+# ----------------------------------------------------------------------------
+
 # ---- top navigation bar ----
-logo_col, nav_home, nav_create, nav_insights = st.columns([5, 1.0, 1.5, 1.2])
+logo_col, nav_home, nav_create, nav_insights = st.columns([3, 1.0, 1.7, 1.6])
 with logo_col:
     st.markdown('<div class="topbar-logo">🎬 Greenlight</div>'
                 '<div class="topbar-tag">Oscar-grade synopses, on demand.</div>',
@@ -1014,3 +1085,12 @@ elif st.session_state.page == "Create Project":
     page_create()
 else:
     page_insights()
+
+# render the left-side history AFTER the page runs, so a freshly generated project
+# (appended inside page_create) shows up in the same rerun
+if st.session_state.page == "Create Project":
+    render_history_sidebar()                       # history lives only in the Create Project workspace
+else:                                              # hide the sidebar entirely on Home / Insights
+    st.markdown('<style>section[data-testid="stSidebar"],'
+                'div[data-testid="collapsedControl"]{display:none;}</style>',
+                unsafe_allow_html=True)
