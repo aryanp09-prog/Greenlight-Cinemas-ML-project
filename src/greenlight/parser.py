@@ -8,8 +8,9 @@
 import json
 import re
 
-KNOWN_GENRES = ["Horror","Action","Comedy","Drama","Romance","Thriller",
-                "Science Fiction","Fantasy","Animation","Family","Mystery","Crime"]
+KNOWN_GENRES = ["Action","Adventure","Animation","Comedy","Crime","Documentary","Drama",
+                "Family","Fantasy","History","Horror","Music","Mystery","Romance",
+                "Science Fiction","Thriller","War","Western"]   # full TMDB list (keeps the Adventure fix)
 SEASON_TO_MONTH = {"summer":"June","winter":"December","spring":"April","fall":"October",
                    "autumn":"October","holiday":"December","christmas":"December","halloween":"October"}
 MONTHS = ["January","February","March","April","May","June","July","August",
