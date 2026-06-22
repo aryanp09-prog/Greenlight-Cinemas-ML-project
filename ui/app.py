@@ -737,13 +737,26 @@ def page_home():
             st.markdown(f'<div class="meta-chip">{body}</div>', unsafe_allow_html=True)
 
     st.write("")
-    st.markdown('<div class="section-title">🌟 Talent the data loves</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">🎬 Top Directors</div>', unsafe_allow_html=True)
     cast_grid([
         {"name": "Denis Villeneuve", "role": "Director"},
         {"name": "Greta Gerwig", "role": "Director"},
+        {"name": "Guillermo del Toro", "role": "Director"},
+        {"name": "Kathryn Bigelow", "role": "Director"},
+        {"name": "Jordan Peele", "role": "Director"},
+        {"name": "Barry Jenkins", "role": "Director"},
+    ])
+    st.write("")
+    st.markdown('<div class="section-title">🌟 Top Actors</div>', unsafe_allow_html=True)
+    cast_grid([
         {"name": "Florence Pugh", "role": "Actor"},
         {"name": "Mahershala Ali", "role": "Actor"},
         {"name": "Zendaya", "role": "Actor"},
+        {"name": "Oscar Isaac", "role": "Actor"},
+        {"name": "Michelle Yeoh", "role": "Actor"},
+        {"name": "Charlize Theron", "role": "Actor"},
+        {"name": "Anya Taylor-Joy", "role": "Actor"},
+        {"name": "Viola Davis", "role": "Actor"},
     ])
     st.write("")
     if st.button("🎬  Start a Project", key="home_cta"):
