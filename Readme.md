@@ -97,6 +97,14 @@ The judge and parser are pure functions with unit tests (run on CPU, no GPU):
 
 Deterministic by design: the same synopsis always yields the same score.
 
+```bash
+pip install -r requirements-dev.txt
+pytest                       # 24 passed in ~0.1s
+```
+
+The tested logic lives in `src/greenlight/` (`validator.py`, `parser.py`) — mirrored
+from the Colab cells so the suite exercises the exact code that runs live.
+
 ---
 
 ## 🛠️ Tech stack
@@ -117,7 +125,12 @@ ui/
   faces.json        # cached name → photo-URL map (committed)
   requirements.txt
 src/
+  greenlight/
+    validator.py    # deterministic Critic (mirrors Colab) — unit-tested
+    parser.py       # prompt guardrails (genre/window/length/budget) — unit-tested
   data/ingest.py    # early data-cleaning helper (movies CSV → typed frame)
+tests/              # pytest suite: 9 validator + 15 parser checks (CPU, no GPU)
+pyproject.toml      # pytest config (pythonpath=src)
 roadmap.md          # the 10-phase project plan
 ```
 

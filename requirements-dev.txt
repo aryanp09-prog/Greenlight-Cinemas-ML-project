@@ -1,0 +1,5 @@
+# Dev/test-only deps (the app itself needs ui/requirements.txt).
+# Run the deterministic Critic + parser tests on the laptop, no GPU:
+#   pip install -r requirements-dev.txt
+#   pytest
+pytest>=7.0

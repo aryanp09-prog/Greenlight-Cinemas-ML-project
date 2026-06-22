@@ -1,0 +1,8 @@
+[tool.pytest.ini_options]
+# Run from the repo root:  pytest
+# `pythonpath = src` lets tests import the core package as `greenlight.*`
+# without an install step. The validator + parser are pure functions (no GPU/LLM),
+# so the whole suite runs on the laptop in well under a second.
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-v"

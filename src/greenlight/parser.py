@@ -1,0 +1,78 @@
+# ============================================================
+#  NATURAL-PROMPT PARSER (ported from the Colab notebook)
+# ============================================================
+# `parse_prompt` does fuzzy LLM extraction in Colab; the safety net — `_normalize`,
+# `_match_genre`, `_parse_budget` — is pure, deterministic, and tested here. The
+# extraction is fuzzy; the guardrails are exact (so "250 words" and "$50M" are
+# never confused).
+import json
+import re
+
+KNOWN_GENRES = ["Horror","Action","Comedy","Drama","Romance","Thriller",
+                "Science Fiction","Fantasy","Animation","Family","Mystery","Crime"]
+SEASON_TO_MONTH = {"summer":"June","winter":"December","spring":"April","fall":"October",
+                   "autumn":"October","holiday":"December","christmas":"December","halloween":"October"}
+MONTHS = ["January","February","March","April","May","June","July","August",
+          "September","October","November","December"]
+
+
+def _match_genre(text):
+    t = (text or "").lower()
+    for g in KNOWN_GENRES:
+        if g.lower() in t: return g
+    if any(k in t for k in ("sci-fi","scifi","sci fi")): return "Science Fiction"
+    if any(k in t for k in ("rom-com","romcom","rom com")): return "Romance"
+    return None
+
+
+def _parse_budget(text):
+    """$50M, 50M$, 50 million, $50,000,000, 2B, 500k -> int dollars (or None)."""
+    t = (text or "").lower().replace(",", "")
+    mults = {"billion":1e9,"b":1e9,"million":1e6,"m":1e6,"mil":1e6,"thousand":1e3,"k":1e3}
+    m = (re.search(r"\$\s*(\d+(?:\.\d+)?)\s*(billion|million|thousand|mil|b|m|k)?", t)
+         or re.search(r"(\d+(?:\.\d+)?)\s*(billion|million|thousand|mil|b|m|k)\b\s*\$?", t)
+         or re.search(r"budget\D{0,12}(\d+(?:\.\d+)?)\s*(billion|million|thousand|mil|b|m|k)?", t))
+    if not m: return None
+    val = float(m.group(1)); mult = mults.get(m.group(2) or "", 1)
+    if mult == 1 and val < 1000: mult = 1e6          # "budget of 50" = millions
+    return int(val * mult)
+
+
+def _normalize(data, text):                          # deterministic guardrails — TESTABLE
+    genre = data.get("genre")
+    if genre not in KNOWN_GENRES:
+        genre = _match_genre(text) or "Drama"
+    window = data.get("window")
+    if isinstance(window, str):
+        w = window.strip().lower()
+        if w in ("", "null", "none", "best", "any", "data-driven"): window = None
+        elif w in SEASON_TO_MONTH: window = SEASON_TO_MONTH[w]
+        else: window = next((mo for mo in MONTHS if mo.lower()[:3] in w), None)
+    else:
+        window = None
+    length = data.get("length")
+    lm = re.search(r"(\d{2,4})\s*word", (text or "").lower())
+    if lm: length = int(lm.group(1))
+    if not isinstance(length, int) or not (30 <= length <= 600): length = 80
+    budget = _parse_budget(text)                     # number in text wins
+    return {"genre": genre, "window": window, "length": length, "budget": budget}
+
+
+def parse_prompt(text, call_llm=None):
+    """LLM extraction + deterministic guardrails.
+
+    In Colab a `call_llm` callable is provided by the runtime. Off-Colab (e.g. on
+    the laptop), pass your own callable or leave it None to skip extraction and
+    rely entirely on the deterministic guardrails over the raw text.
+    """
+    schema = ('{"genre":"<one genre>","window":"<month/season, or null>",'
+              '"length":<int or null>,"budget":<int dollars or null>}')
+    prompt = (f"Extract fields from this film request. Reply ONLY JSON: {schema}\n"
+              f"Allowed genres: {', '.join(KNOWN_GENRES)}.\n"
+              f"If they say 'best release window' or give no timing, window=null.\n"
+              f"Request: {text}")
+    data = {}
+    if call_llm is not None:
+        try: data = json.loads(call_llm(prompt, max_tokens=120, fmt="json"))
+        except Exception: data = {}
+    return _normalize(data, text)
