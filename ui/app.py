@@ -885,12 +885,15 @@ def page_create():
     st.markdown('<div class="section-title">🏆 Final Synopsis</div>', unsafe_allow_html=True)
     budget_chip = (f'<span class="meta-chip">Budget: <b>{_fmt_money(result["budget"])}</b></span>'
                    if result.get("budget") else "")
+    genres_disp = " + ".join(result.get("genres") or [result["genre"]])
+    insp = result.get("inspirations") or []
+    insp_chip = (f'<span class="meta-chip">Inspired by: <b>{", ".join(insp)}</b></span>' if insp else "")
     st.markdown(
         f'<div class="meta-row">'
-        f'<span class="meta-chip">Genre: <b>{result["genre"]}</b></span>'
+        f'<span class="meta-chip">Genre: <b>{genres_disp}</b></span>'
         f'<span class="meta-chip">Best window: <b>{result["window"]}</b></span>'
         f'<span class="meta-chip">Length: <b>~{result["length"]} words</b></span>'
-        f'{budget_chip}'
+        f'{budget_chip}{insp_chip}'
         f'<span class="meta-chip">Critic score: <b>{result["score"]:.2f}</b></span>'
         f'<span class="meta-chip">Iterations: <b>{result["iterations"]}</b></span>'
         "</div>",

@@ -26,6 +26,40 @@ def _match_genre(text):
     return None
 
 
+def _match_genres(text):
+    """All genres named in the text, in order ('horror comedy' -> [Horror, Comedy])."""
+    t = (text or "").lower()
+    found = [g for g in KNOWN_GENRES if g.lower() in t]
+    if any(k in t for k in ("sci-fi", "scifi", "sci fi")) and "Science Fiction" not in found:
+        found.append("Science Fiction")
+    if any(k in t for k in ("rom-com", "romcom", "rom com")):
+        for g in ("Romance", "Comedy"):
+            if g not in found: found.append(g)
+    return found
+
+
+_INSP_TRIGGERS = ("take inspiration from", "inspiration from", "inspired by", "based on",
+                  "in the style of", "combining the movies", "combining", "combine the movies",
+                  "combine", "mix of", "fusion of", "cross between", "mashup of", "blend of",
+                  "like the movies", "like the movie", "like the films", "like the film")
+_INSP_PREFIX = re.compile(r"^(?:the\s+)?(?:movies?|films?)\s+", re.I)
+
+
+def _inspirations_fallback(text):
+    """Pull named movie titles after a trigger ('combine Matrix and Inception' -> [Matrix, Inception])."""
+    low = (text or "").lower()
+    for k in _INSP_TRIGGERS:
+        i = low.find(k)
+        if i != -1:
+            tail = text[i + len(k):].strip(" :")
+            tail = _INSP_PREFIX.sub("", tail)
+            parts = re.split(r"\s*(?:,|&|\band\b|\bplus\b|\bwith\b)\s*", tail, flags=re.I)
+            titles = [p.strip(" .\"'") for p in parts if p.strip()]
+            titles = [t for t in titles if 1 <= len(t) <= 40]
+            return titles[:3] or None
+    return None
+
+
 _PREMISE_TRIGGERS = ("where ", "about ", "in which ", "story of ", "involving ",
                      "featuring ", "following ", "centered on ", "centred on ",
                      "premise:", "plot:")
@@ -62,6 +96,13 @@ def _normalize(data, text):                          # deterministic guardrails 
     genre = data.get("genre")
     if genre not in KNOWN_GENRES:
         genre = _match_genre(text) or "Drama"
+    # multi-genre: LLM list + deterministic scan (dedup, keep order); primary genre = first
+    genres = [g for g in (data.get("genres") or []) if g in KNOWN_GENRES]
+    for g in _match_genres(text):
+        if g not in genres: genres.append(g)
+    if not genres:
+        genres = [genre]
+    genre = genres[0]
     window = data.get("window")
     if isinstance(window, str):
         w = window.strip().lower()
@@ -83,8 +124,15 @@ def _normalize(data, text):                          # deterministic guardrails 
         premise = None
     if not premise:
         premise = _premise_fallback(text)
-    return {"genre": genre, "window": window, "length": length,
-            "budget": budget, "premise": premise}
+    inspirations = data.get("inspirations")              # named movies to take inspiration from / fuse
+    if isinstance(inspirations, list):
+        inspirations = [str(x).strip(" .\"'") for x in inspirations if str(x).strip()]
+    else:
+        inspirations = []
+    if not inspirations:
+        inspirations = _inspirations_fallback(text) or []
+    return {"genre": genre, "genres": genres, "window": window, "length": length,
+            "budget": budget, "premise": premise, "inspirations": inspirations}
 
 
 def parse_prompt(text, call_llm=None):
@@ -94,14 +142,19 @@ def parse_prompt(text, call_llm=None):
     the laptop), pass your own callable or leave it None to skip extraction and
     rely entirely on the deterministic guardrails over the raw text.
     """
-    schema = ('{"genre":"<one genre>","window":"<month/season, or null>",'
-              '"length":<int or null>,"budget":<int dollars or null>,'
-              '"premise":"<the specific plot/characters the user describes, or null>"}')
+    schema = ('{"genre":"<primary genre>","genres":["<all genres named>"],'
+              '"window":"<month/season, or null>","length":<int or null>,'
+              '"budget":<int dollars or null>,'
+              '"premise":"<the specific plot/characters the user describes, or null>",'
+              '"inspirations":["<movie titles to take inspiration from / combine, or empty>"]}')
     prompt = (f"Extract fields from this film request. Reply ONLY JSON: {schema}\n"
               f"Allowed genres: {', '.join(KNOWN_GENRES)}.\n"
               f"If they say 'best release window' or give no timing, window=null.\n"
-              f"Put any specific story the user describes (characters, what happens) into "
-              f"premise; if they only name a genre with no plot, premise=null.\n"
+              f"Put any specific story the user describes (characters, what happens) into premise; "
+              f"if they only name a genre with no plot, premise=null.\n"
+              f"List EVERY genre they name in genres (e.g. 'horror comedy' -> both). "
+              f"Put any movies they want to take inspiration from or combine into inspirations "
+              f"(e.g. 'combine Matrix and Inception' -> [\"The Matrix\",\"Inception\"]).\n"
               f"Request: {text}")
     data = {}
     if call_llm is not None:
