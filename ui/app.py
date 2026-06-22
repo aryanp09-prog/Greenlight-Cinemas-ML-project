@@ -417,6 +417,15 @@ _SWAP_WORDS = ("replace", "swap", "change", "instead", "remove", "don't", "do no
                "dont", "not a fan", "different", "someone else", "other", "recast")
 
 
+def _explicit_target(text):
+    """Parse 'replace X with Y' / 'swap X for Y' / 'change X to Y' -> (X, Y), preserving Y's casing."""
+    m = re.search(r"(?:replace|swap|change|recast|sub(?:stitute)?)\s+(.+?)\s+(?:with|for|to|by|->|→)\s+(.+?)[.?!]*$",
+                  text, re.I)
+    if m:
+        return m.group(1).strip(" '\""), m.group(2).strip(" '\"")
+    return None, None
+
+
 def _name_targets(people, msg):
     """Match people by full name, spaceless name, or last-name token (handles typos/partials)."""
     words = set(re.findall(r"[a-z]+", msg))
@@ -471,8 +480,25 @@ def _demo_revise(result):
 
 
 def chat_respond(result, message):
-    """Demo chat: recasting + (toggled) synopsis revision. Returns (reply, updated | None, animate)."""
+    """Demo chat: explicit/auto recasting + (toggled) synopsis revision. Returns (reply, updated | None, animate)."""
     msg = message.lower()
+    old_name, new_name = _explicit_target(message)
+    if new_name:                                              # ---- explicit "replace X with Y" (user-chosen)
+        new = json.loads(json.dumps(result))
+        targets = _name_targets(new["cast"], old_name.lower()) + _name_targets(new["directors"], old_name.lower())
+        if not targets:
+            return (f'I couldn\'t find "{old_name}" in the current cast or directors.'), None, False
+        retired = set(new.get("_retired", [])); swapped = []
+        for p in targets:
+            for i, cc in enumerate(new["cast"]):
+                if cc["name"] == p["name"]:
+                    new["cast"][i] = {"name": new_name, "role": cc["role"]}; retired.add(p["name"])
+            for i, dd in enumerate(new["directors"]):
+                if dd["name"] == p["name"]:
+                    new["directors"][i] = {"name": new_name, "role": dd["role"]}; retired.add(p["name"])
+            swapped.append(f"{p['name']} → {new_name}")
+        new["_retired"] = list(retired)
+        return ("Done — recast " + "; ".join(swapped) + ". 🎬"), new, False
     rm_cast = _name_targets(result["cast"], msg)
     rm_dirs = _name_targets(result["directors"], msg)
     if (rm_cast or rm_dirs) and any(w in msg for w in _SWAP_WORDS):       # ---- recast (instant)
