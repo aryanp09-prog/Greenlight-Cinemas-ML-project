@@ -1062,32 +1062,7 @@ def page_insights():
     )
     st.markdown('<div class="gold-rule"></div>', unsafe_allow_html=True)
 
-    # ---- the valley chart ----
-    st.markdown('<div class="section-title">📉 The Mid-Budget Valley</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="meta-chip">Median ROI by budget band. Notice the dip in the middle — '
-        'big enough to be expensive, not big enough to be an event. ROI recovers only at tentpole scale.</div>',
-        unsafe_allow_html=True,
-    )
-    genres = st.multiselect("Genres to compare", list(GENRE_BANDS.keys()),
-                            default=["Science Fiction", "Thriller", "Drama", "Action"])
-    if genres:
-        long = [{"Budget band": band_x[i], "Median ROI": GENRE_BANDS[g][k][0], "Genre": g}
-                for g in genres for i, k in enumerate(band_keys)]
-        chart = (alt.Chart(pd.DataFrame(long))
-                 .mark_line(point=True, strokeWidth=3)
-                 .encode(
-                     x=alt.X("Budget band:N", sort=band_x, title="Budget band"),
-                     y=alt.Y("Median ROI:Q", title="Median ROI (×)"),
-                     color=alt.Color("Genre:N", legend=alt.Legend(title="Genre")),
-                     tooltip=["Genre", "Budget band", "Median ROI"])
-                 .properties(height=360))
-        st.altair_chart(chart, use_container_width=True)
-    else:
-        st.info("Pick at least one genre to see its ROI curve.")
-
     # ---- per-genre band breakdown ----
-    st.write("")
     st.markdown('<div class="section-title">🎬 Budget breakdown by genre</div>', unsafe_allow_html=True)
     g = st.selectbox("Pick a genre", list(GENRE_BANDS.keys()),
                      index=list(GENRE_BANDS.keys()).index("Horror"))
@@ -1098,29 +1073,6 @@ def page_insights():
         rows += (f'<div class="insight {cls}" style="margin:6px 0;">{x} &nbsp;→&nbsp; median ROI '
                  f'<b>{roi}×</b> <span style="opacity:.6">(n={n})</span></div>')
     st.markdown(rows, unsafe_allow_html=True)
-
-    # ---- peak vs valley summary ----
-    st.write("")
-    st.markdown('<div class="section-title">🏆 Peak vs. valley, every genre</div>', unsafe_allow_html=True)
-    disp = dict(zip(band_keys, band_x))
-    cells = ""
-    for gn in GENRE_BANDS:
-        b = GENRE_BANDS[gn]
-        peak = max(band_keys, key=lambda k: b[k][0])
-        valley = min(band_keys, key=lambda k: b[k][0])
-        cells += (f'<tr>'
-                  f'<td style="padding:6px 16px;color:#f0e0b0;">{gn}</td>'
-                  f'<td style="padding:6px 16px;color:#9fe09f;">{disp[peak]} ({b[peak][0]}×)</td>'
-                  f'<td style="padding:6px 16px;color:#f0a0a0;">{disp[valley]} ({b[valley][0]}×)</td>'
-                  f'</tr>')
-    st.markdown(
-        '<table style="border-collapse:collapse;">'
-        '<tr><th style="text-align:left;padding:6px 16px;color:#D4AF37;">Genre</th>'
-        '<th style="text-align:left;padding:6px 16px;color:#D4AF37;">Best band</th>'
-        '<th style="text-align:left;padding:6px 16px;color:#D4AF37;">Worst band</th></tr>'
-        f'{cells}</table>',
-        unsafe_allow_html=True,
-    )
     st.caption("Source: median revenue/budget over films with budget ≥ $100K, joined to genre. "
                "The generator's budget verdict reads these same numbers live.")
 
