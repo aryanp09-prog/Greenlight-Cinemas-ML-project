@@ -315,6 +315,35 @@ def budget_insight(genre, budget):
     return {"verdict": v, "message": msg, "roi": roi, "band": band}
 
 
+# Industry-standard budget allocation (real ranges, not random). VFX-heavy genres
+# shift money from cast → VFX; talkier genres do the reverse. Sums to 100%.
+_VFX_HEAVY = {"Science Fiction", "Fantasy", "Action", "Adventure", "Animation"}
+_SPLIT_VFX = {"Cast (lead & supporting)": 0.20, "Director, producers & writers": 0.08,
+              "Crew (below-the-line)": 0.22, "Production (sets, locations, units)": 0.16,
+              "VFX & post-production": 0.24, "Music & sound": 0.05, "Contingency": 0.05}
+_SPLIT_STD = {"Cast (lead & supporting)": 0.27, "Director, producers & writers": 0.10,
+              "Crew (below-the-line)": 0.26, "Production (sets, locations, units)": 0.20,
+              "VFX & post-production": 0.08, "Music & sound": 0.05, "Contingency": 0.04}
+
+
+def budget_breakdown(budget, genre):
+    """Split the total budget into line items using genre-aware industry percentages."""
+    if not budget:
+        return None
+    pct = _SPLIT_VFX if genre in _VFX_HEAVY else _SPLIT_STD
+    return [{"item": k, "pct": round(v * 100), "amount": int(budget * v)} for k, v in pct.items()]
+
+
+def cast_salary_split(cast_budget, cast):
+    """Split the cast allocation by standard billing order (lead commands the largest share)."""
+    if not cast_budget or not cast:
+        return []
+    weights = [0.45, 0.27, 0.18, 0.10][:len(cast)]
+    s = sum(weights)
+    return [{"name": c["name"], "role": c.get("role", ""), "amount": int(cast_budget * w / s)}
+            for c, w in zip(cast, weights)]
+
+
 def _light_parse(prompt: str):
     """Tiny local parse for the demo display only (the real parser runs on Colab)."""
     genres = ["Horror", "Action", "Comedy", "Drama", "Romance", "Thriller",
@@ -565,15 +594,19 @@ def mock_result(prompt: str):
     }
 
 
-def call_backend(prompt: str):
-    url = st.session_state.get("backend_url", "").strip()
-    live = st.session_state.get("use_live", False)
+def _generate(prompt: str, url: str, live: bool):
+    """Thread-safe network call (no st.session_state — safe to run in a background thread)."""
     if live and url:
         r = requests.post(f"{url}/generate", json={"prompt": prompt}, timeout=REQUEST_TIMEOUT)
         r.raise_for_status()
         return r.json()
     time.sleep(0.4)
     return mock_result(prompt)
+
+
+def call_backend(prompt: str):
+    return _generate(prompt, st.session_state.get("backend_url", "").strip(),
+                     st.session_state.get("use_live", False))
 
 
 def chat_backend(message: str, result: dict):
@@ -583,6 +616,15 @@ def chat_backend(message: str, result: dict):
     r.raise_for_status()
     d = r.json()
     return d.get("reply", ""), d.get("result")
+
+
+def breakdown_backend(budget: int, genre: str, cast: list):
+    """Live-mode budget breakdown → Colab /breakdown (ROI-weighted cast salary split)."""
+    url = st.session_state.get("backend_url", "").strip()
+    r = requests.post(f"{url}/breakdown", json={"budget": int(budget), "genre": genre, "cast": cast},
+                      timeout=REQUEST_TIMEOUT)
+    r.raise_for_status()
+    return r.json()
 
 
 def ask_backend(question: str):
@@ -834,15 +876,37 @@ def page_create():
         submitted = st.form_submit_button("🎬  Action!  Send to the writers' room")
 
     if submitted and prompt.strip():
-        with st.spinner("Writer drafting · Critic scoring · Refiner polishing…"):
+        import concurrent.futures
+        url = st.session_state.get("backend_url", "").strip()     # read in main thread (not thread-safe inside)
+        live = st.session_state.get("use_live", False)
+        st.markdown('<div class="section-title">🗣️ Writers\' room debate</div>', unsafe_allow_html=True)
+        ph = st.empty()
+        seq = ["Writer", "Critic", "Refiner"]
+        err = None
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_generate, prompt, url, live)         # backend runs in the background...
+            i = 0
+            while not fut.done():                                 # ...while the live agent's station glows
+                stage = seq[i % 3]                                # demo / fallback: cycle
+                if live and url:
+                    try:                                          # poll the real current agent
+                        stage = requests.get(f"{url}/progress", timeout=3).json().get("stage", stage)
+                    except Exception:
+                        pass
+                if stage not in seq:                              # "done" or unknown -> show Refiner
+                    stage = "Refiner"
+                ph.markdown(_stations_html(active=stage), unsafe_allow_html=True)
+                time.sleep(0.6); i += 1
             try:
-                result = call_backend(prompt)
+                result = fut.result()
             except Exception as e:
-                st.error(f"Backend error: {e}\n\nCheck the URL and that the Colab cells are running. Showing a demo result instead.")
-                result = mock_result(prompt)
+                err, result = e, mock_result(prompt)
+        ph.markdown(_stations_html(done_all=True), unsafe_allow_html=True)
+        if err:
+            st.error(f"Backend error: {err}\n\nCheck the URL and that the Colab cells are running. Showing a demo result instead.")
         st.session_state.result = result
         st.session_state.chat = []
-        st.session_state.animate = True
+        st.session_state.animate = False             # already animated live during generation
         st.session_state.history.append({            # log into the left-side history panel
             "prompt": prompt.strip(),
             "genre": result.get("genre", "?"),
@@ -851,6 +915,7 @@ def page_create():
             "chat": [],
         })
         st.session_state.active_idx = len(st.session_state.history) - 1
+        st.rerun()                                   # re-render cleanly with the finished result
     elif submitted:
         st.warning("Give the writers something to work with — type a pitch first.")
 
@@ -904,6 +969,40 @@ def page_create():
         cls = {"strong": "insight-strong", "solid": "insight-solid", "weak": "insight-weak"}.get(ins["verdict"], "insight-solid")
         icon = {"strong": "✅", "solid": "👍", "weak": "⚠️"}.get(ins["verdict"], "•")
         st.markdown(f'<div class="insight {cls}">{icon} {ins["message"]}</div>', unsafe_allow_html=True)
+
+    # ---- budget breakdown (industry-norm allocation; only when a budget was given) ----
+    if result.get("budget"):
+        bb, sal, roi_weighted = None, None, False
+        if _live:                                            # live: real ROI-weighted cast split
+            try:
+                d = breakdown_backend(result["budget"], result["genre"], result.get("cast", []))
+                bb, sal, roi_weighted = d.get("breakdown"), d.get("cast_salaries"), True
+            except Exception:
+                bb = None
+        if not bb:                                           # demo / fallback: billing-order split
+            bb = budget_breakdown(result["budget"], result["genre"])
+            cast_amt = next((l["amount"] for l in bb if l["item"].startswith("Cast")), 0)
+            sal = cast_salary_split(cast_amt, result.get("cast", []))
+        with st.expander(f"💰 Budget breakdown — {_fmt_money(result['budget'])} (estimated)", expanded=True):
+            st.caption(f"Standard {result['genre']} production allocation — real industry percentages, "
+                       "not contracted figures."
+                       + (" Cast split weighted by each actor's historical ROI." if roi_weighted
+                          else " Cast split by billing order."))
+            rows = "".join(
+                f'<tr><td style="padding:5px 18px;color:#f0e0b0;">{l["item"]}</td>'
+                f'<td style="padding:5px 18px;color:#bdb38f;text-align:right;">{l["pct"]}%</td>'
+                f'<td style="padding:5px 18px;color:var(--gold-bright);text-align:right;font-weight:700;">'
+                f'{_fmt_money(l["amount"])}</td></tr>' for l in bb)
+            st.markdown(f'<table style="border-collapse:collapse;width:100%;max-width:560px;">{rows}</table>',
+                        unsafe_allow_html=True)
+            if sal:
+                chips = " &nbsp;·&nbsp; ".join(
+                    f'{s["name"]} <b style="color:var(--gold-bright)">{_fmt_money(s["amount"])}</b>'
+                    + (f' <span style="opacity:.55">({s["roi"]}× ROI)</span>' if s.get("roi") else "")
+                    for s in sal)
+                st.markdown(f'<div class="meta-chip" style="margin-top:12px;">🎭 Est. cast allocation: '
+                            f'{chips}</div>', unsafe_allow_html=True)
+
     st.markdown(f'<div class="script-panel">{result["synopsis"]}</div>', unsafe_allow_html=True)
 
     # ---- suggested cast + directors (glassmorphism) ----
