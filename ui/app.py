@@ -448,12 +448,22 @@ _SWAP_WORDS = ("replace", "swap", "change", "instead", "remove", "don't", "do no
                "dont", "not a fan", "different", "someone else", "other", "recast")
 
 
+# generic phrases that mean "pick anyone" — NOT a literal replacement name
+_GENERIC_NAME = {"someone else", "someone", "anyone", "anybody", "somebody", "another", "another actor",
+                 "a different actor", "different actor", "new actor", "a new actor", "other", "else",
+                 "some one else", "a new one", "anyone else", "somebody else", "a different one"}
+
+
 def _explicit_target(text):
-    """Parse 'replace X with Y' / 'swap X for Y' / 'change X to Y' -> (X, Y), preserving Y's casing."""
+    """Parse 'replace X with Y' / 'swap X for Y' / 'change X to Y' -> (X, Y), preserving Y's casing.
+    Returns (X, None) when Y is a generic placeholder ('someone else') so the caller auto-picks."""
     m = re.search(r"(?:replace|swap|change|recast|sub(?:stitute)?)\s+(.+?)\s+(?:with|for|to|by|->|→)\s+(.+?)[.?!]*$",
                   text, re.I)
     if m:
-        return m.group(1).strip(" '\""), m.group(2).strip(" '\"")
+        old, new = m.group(1).strip(" '\""), m.group(2).strip(" '\"")
+        if new.lower().strip(" .") in _GENERIC_NAME:
+            return old, None
+        return old, new
     return None, None
 
 
