@@ -153,8 +153,9 @@ def parse_prompt(text, call_llm=None):
               f"Put any specific story the user describes (characters, what happens) into premise; "
               f"if they only name a genre with no plot, premise=null.\n"
               f"List EVERY genre they name in genres (e.g. 'horror comedy' -> both). "
-              f"Put any movies they want to take inspiration from or combine into inspirations "
-              f"(e.g. 'combine Matrix and Inception' -> [\"The Matrix\",\"Inception\"]).\n"
+              f"Put ONLY movies the user EXPLICITLY names (as inspiration or to combine) into inspirations "
+              f"(e.g. 'combine Matrix and Inception' -> [\"The Matrix\",\"Inception\"]); if they name no "
+              f"movie, inspirations=[]. Do NOT infer or guess movies from the plot.\n"
               f"Request: {text}")
     data = {}
     if call_llm is not None:

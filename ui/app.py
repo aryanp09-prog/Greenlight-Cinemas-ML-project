@@ -326,11 +326,13 @@ _SPLIT_STD = {"Cast (lead & supporting)": 0.27, "Director, producers & writers":
               "VFX & post-production": 0.08, "Music & sound": 0.05, "Contingency": 0.04}
 
 
-def budget_breakdown(budget, genre):
-    """Split the total budget into line items using genre-aware industry percentages."""
+def budget_breakdown(budget, genres):
+    """Split the total budget into line items using genre-aware industry percentages.
+    `genres` may be a list or a single string; VFX-heavy if ANY genre is VFX-heavy."""
     if not budget:
         return None
-    pct = _SPLIT_VFX if genre in _VFX_HEAVY else _SPLIT_STD
+    gl = genres if isinstance(genres, list) else [genres]
+    pct = _SPLIT_VFX if any(g in _VFX_HEAVY for g in gl) else _SPLIT_STD
     return [{"item": k, "pct": round(v * 100), "amount": int(budget * v)} for k, v in pct.items()]
 
 
@@ -618,11 +620,12 @@ def chat_backend(message: str, result: dict):
     return d.get("reply", ""), d.get("result")
 
 
-def breakdown_backend(budget: int, genre: str, cast: list):
+def breakdown_backend(budget: int, genres: list, cast: list):
     """Live-mode budget breakdown → Colab /breakdown (ROI-weighted cast salary split)."""
     url = st.session_state.get("backend_url", "").strip()
-    r = requests.post(f"{url}/breakdown", json={"budget": int(budget), "genre": genre, "cast": cast},
-                      timeout=REQUEST_TIMEOUT)
+    r = requests.post(f"{url}/breakdown",
+                      json={"budget": int(budget), "genres": genres, "genre": (genres[0] if genres else ""),
+                            "cast": cast}, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     return r.json()
 
@@ -973,14 +976,15 @@ def page_create():
     # ---- budget breakdown (industry-norm allocation; only when a budget was given) ----
     if result.get("budget"):
         bb, sal, roi_weighted = None, None, False
+        gl = result.get("genres") or [result["genre"]]       # use the full genre list for VFX classification
         if _live:                                            # live: real ROI-weighted cast split
             try:
-                d = breakdown_backend(result["budget"], result["genre"], result.get("cast", []))
+                d = breakdown_backend(result["budget"], gl, result.get("cast", []))
                 bb, sal, roi_weighted = d.get("breakdown"), d.get("cast_salaries"), True
             except Exception:
                 bb = None
         if not bb:                                           # demo / fallback: billing-order split
-            bb = budget_breakdown(result["budget"], result["genre"])
+            bb = budget_breakdown(result["budget"], gl)
             cast_amt = next((l["amount"] for l in bb if l["item"].startswith("Cast")), 0)
             sal = cast_salary_split(cast_amt, result.get("cast", []))
         with st.expander(f"💰 Budget breakdown — {_fmt_money(result['budget'])} (estimated)", expanded=True):
