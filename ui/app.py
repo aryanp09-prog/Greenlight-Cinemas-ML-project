@@ -236,6 +236,25 @@ def cast_grid(people):
     st.markdown(f'<div class="grid">{cards}</div>', unsafe_allow_html=True)
 
 
+def emerging_grid(people):
+    cards = ""
+    for p in people:
+        roi = p.get("roi")
+        badge = (f'<div style="color:#e8c66a;font-weight:800;font-size:.95rem;margin-top:4px;">'
+                 f'{roi:.2f}× median ROI</div>') if roi else ""
+        meta = " · ".join([s for s in (f'since {p["debut"]}' if p.get("debut") else "",
+                                        f'{p["films"]} films' if p.get("films") else "") if s])
+        cards += (
+            '<div class="glass-card">'
+            f'<img src="{p.get("img") or face(p["name"])}" alt="{p["name"]}">'
+            f'<div class="cast-name">{p["name"]}</div>'
+            f'{badge}'
+            f'<div class="cast-role">{meta}</div>'
+            "</div>"
+        )
+    st.markdown(f'<div class="grid">{cards}</div>', unsafe_allow_html=True)
+
+
 # real median ROI by budget band, per genre (from DuckDB on 6,444 ROI films; DEMO copy —
 # live mode reads constraints["budget_insights"]).  values = (roi_multiple, sample_n)
 BAND_DEFS = [("<1M", 1_000_000), ("1-10M", 10_000_000), ("10-40M", 40_000_000),
@@ -252,6 +271,17 @@ GENRE_BANDS = {
     "Science Fiction": {"<1M": (4.00, 35),  "1-10M": (1.53, 135),  "10-40M": (1.46, 243),  "40-100M": (1.58, 184), "100M+": (2.61, 172)},
     "Fantasy":         {"<1M": (2.45, 19),  "1-10M": (1.59, 103),  "10-40M": (1.42, 201),  "40-100M": (1.88, 190), "100M+": (2.75, 153)},
 }
+
+# Emerging talent — actors who DEBUTED recently (in the dataset) yet already post strong median ROI.
+# DEMO snapshot baked from DuckDB (fin JOIN movie_actors); fill it from the Colab query (see chat).
+# Each: {"name", "roi" (median ROI ×), "films" (ROI films), "debut" (first year)}.
+EMERGING_ACTORS = [
+    {"name": "Olivia Cooke",    "roi": 20.72, "films": 3, "debut": 2014},
+    {"name": "Anya Taylor-Joy", "roi": 11.55, "films": 3, "debut": 2016},
+    {"name": "Sam Claflin",     "roi": 10.40, "films": 3, "debut": 2014},
+    {"name": "Dakota Johnson",  "roi": 6.89,  "films": 3, "debut": 2015},
+    {"name": "Jamie Dornan",    "roi": 6.89,  "films": 3, "debut": 2015},
+]
 
 
 def _band_for(budget):
@@ -539,7 +569,7 @@ def chat_respond(result, message):
                     new["directors"][i] = {"name": new_name, "role": dd["role"]}; retired.add(p["name"])
             swapped.append(f"{p['name']} → {new_name}")
         new["_retired"] = list(retired)
-        return ("Done — recast " + "; ".join(swapped) + ". 🎬"), new, False
+        return ("Done — recast " + "; ".join(swapped) + "."), new, False
     rm_cast = _name_targets(result["cast"], msg)
     rm_dirs = _name_targets(result["directors"], msg)
     if (rm_cast or rm_dirs) and any(w in msg for w in _SWAP_WORDS):       # ---- recast (instant)
@@ -569,7 +599,7 @@ def chat_respond(result, message):
             swapped.append(f"{d['name']} → {repl}")
         new["_retired"] = list(retired)
         if swapped:
-            return ("Done — recast " + "; ".join(swapped) + ". Updated lineup below. 🎬"), new, False
+            return ("Done — recast " + "; ".join(swapped) + ". Updated lineup below."), new, False
         return ("I've cycled through the fresh demo faces for this genre — "
                 "connect the live backend for the full talent pool."), None, False
     if any(w in msg for w in _SYN_EDIT_WORDS):                            # ---- synopsis revision (re-animate)
@@ -749,9 +779,9 @@ def insight_answer(q):
                                      "per year", "by year", "each year", "trend"])
             or ((("compare" in ql) or re.search(r"\bvs\.?\b|\bversus\b", ql)) and len(gs) < 2)):
         return {"needs_live": True,
-                "text": "📡 Actor, director, and year-by-year questions read the **full film database** "
-                        "(on the live backend). Switch on **Use live backend** to ask those. Right now I can "
-                        "answer **budget & genre ROI** questions — try the chips below."}
+                "text": "Actor, director, and year-by-year questions read the **full film database** "
+                        "on the live backend. Switch on **Use live backend** to ask those. Right now I can "
+                        "answer **budget and genre ROI** questions — try the chips below."}
 
     if len(gs) >= 2:
         return {"text": f"Median ROI across budget bands — {', '.join(gs)}:",
@@ -811,7 +841,7 @@ def _render_insight(ans):
     if ans.get("error"):
         st.warning(ans["error"]); return
     if ans.get("text"):
-        st.markdown(f'<div class="insight insight-solid">🤖 {ans["text"]}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="insight insight-solid">{ans["text"]}</div>', unsafe_allow_html=True)
     if ans.get("title"):
         st.markdown(f"**{ans['title']}**")
     df = ans.get("df")
@@ -860,7 +890,7 @@ def _render_insight(ans):
             st.dataframe(df, use_container_width=True, hide_index=True)
         summary = ans.get("summary") or actor_summary
         if summary:
-            st.markdown(f'<div class="insight insight-solid">🧠 <b>AI summary</b> — {summary}</div>',
+            st.markdown(f'<div class="insight insight-solid"><b>Summary</b> — {summary}</div>',
                         unsafe_allow_html=True)
     if ans.get("sql"):
         with st.expander("Query the assistant ran"):
@@ -879,18 +909,18 @@ def page_home():
     st.markdown('<div class="gold-rule"></div>', unsafe_allow_html=True)
 
     c1, c2, c3 = st.columns(3)
-    for col, (icon, title, body) in zip(
+    for col, (title, body) in zip(
         (c1, c2, c3),
-        [("🎞️", "Real Data", "5,381 ROI-positive films distilled into hard constraints — genre, season, talent."),
-         ("🤖", "Agents Argue", "A Writer drafts, a tested Critic scores, a Refiner fixes — looping to a winner."),
-         ("🏆", "Cast to Win", "Suggested top cast & directors the data ties to higher returns.")],
+        [("Grounded in Real Data", "Every recommendation traces back to 5,381 ROI-positive films, distilled into hard constraints on genre, release window, and talent."),
+         ("Agents That Argue", "A Writer drafts, a deterministic Critic scores it, and a Refiner rewrites — looping until the synopsis earns its greenlight."),
+         ("Cast to Win", "Cast and directors drawn from the talent the data links to stronger box-office returns.")],
     ):
         with col:
-            st.markdown(f'<div class="section-title">{icon} {title}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="section-title">{title}</div>', unsafe_allow_html=True)
             st.markdown(f'<div class="meta-chip">{body}</div>', unsafe_allow_html=True)
 
     st.write("")
-    st.markdown('<div class="section-title">🎬 Top Directors</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Top Directors</div>', unsafe_allow_html=True)
     cast_grid([
         {"name": "Denis Villeneuve", "role": "Director"},
         {"name": "Greta Gerwig", "role": "Director"},
@@ -900,7 +930,7 @@ def page_home():
         {"name": "Barry Jenkins", "role": "Director"},
     ])
     st.write("")
-    st.markdown('<div class="section-title">🌟 Top Actors</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Top Actors</div>', unsafe_allow_html=True)
     cast_grid([
         {"name": "Florence Pugh", "role": "Actor"},
         {"name": "Mahershala Ali", "role": "Actor"},
@@ -911,8 +941,13 @@ def page_home():
         {"name": "Anya Taylor-Joy", "role": "Actor"},
         {"name": "Viola Davis", "role": "Actor"},
     ])
+    if EMERGING_ACTORS:
+        st.write("")
+        st.markdown('<div class="section-title">Emerging Talent — new faces the data already rewards</div>',
+                    unsafe_allow_html=True)
+        emerging_grid(EMERGING_ACTORS)
     st.write("")
-    if st.button("🎬  Start a Project", key="home_cta"):
+    if st.button("Start a Project", key="home_cta"):
         st.session_state.page = "Create Project"
         st.rerun()
 
@@ -927,7 +962,7 @@ def page_create():
     )
     st.markdown('<div class="gold-rule"></div>', unsafe_allow_html=True)
 
-    with st.expander("⚙️  Backend settings  ·  " + ("🟢 LIVE" if _live else "🟡 DEMO")):
+    with st.expander("Backend settings  ·  " + ("LIVE" if _live else "DEMO")):
         st.session_state.backend_url = st.text_input(
             "Colab backend URL (from the cloudflared cell)",
             value=st.session_state.get("backend_url", ""),
@@ -937,7 +972,7 @@ def page_create():
             "Use live backend  (uncheck = demo / no GPU)",
             value=st.session_state.get("use_live", False),
         )
-        if st.button("🔌 Test connection", type="secondary"):
+        if st.button("Test connection", type="secondary"):
             u = st.session_state.backend_url.strip()
             if not u:
                 st.warning("Enter the backend URL first.")
@@ -945,7 +980,7 @@ def page_create():
                 try:
                     h = requests.get(f"{u}/health", timeout=10)
                     if h.ok and h.json().get("status") == "ok":
-                        st.success("Connected ✓  backend is healthy.")
+                        st.success("Connected — backend is healthy.")
                     else:
                         st.error(f"Reached the server but got an unexpected response ({h.status_code}).")
                 except Exception as e:
@@ -958,13 +993,13 @@ def page_create():
             placeholder="Generate a 250-word synopsis for a Thriller for the best release window…",
             height=130,
         )
-        submitted = st.form_submit_button("🎬  Action!  Send to the writers' room")
+        submitted = st.form_submit_button("Action — send to the writers' room")
 
     if submitted and prompt.strip():
         import concurrent.futures
         url = st.session_state.get("backend_url", "").strip()     # read in main thread (not thread-safe inside)
         live = st.session_state.get("use_live", False)
-        st.markdown('<div class="section-title">🗣️ Writers\' room debate</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">Writers\' room debate</div>', unsafe_allow_html=True)
         ph = st.empty()
         seq = ["Writer", "Critic", "Refiner"]
         err = None
@@ -1012,7 +1047,7 @@ def page_create():
         components.html("<script>window.parent.scrollTo({top:0,behavior:'smooth'});</script>", height=0)
 
     # ---- the agents' debate ----
-    st.markdown('<div class="section-title">🗣️ Writers\' room debate</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Writers\' room debate</div>', unsafe_allow_html=True)
     if st.session_state.pop("animate", False):
         _agent_choreography(min(int(result.get("iterations", 3)), 3))     # glow travels Writer→Critic→Refiner
     else:
@@ -1032,7 +1067,7 @@ def page_create():
         )
 
     # ---- final script ----
-    st.markdown('<div class="section-title">🏆 Final Synopsis</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Final Synopsis</div>', unsafe_allow_html=True)
     budget_chip = (f'<span class="meta-chip">Budget: <b>{_fmt_money(result["budget"])}</b></span>'
                    if result.get("budget") else "")
     genres_disp = " + ".join(result.get("genres") or [result["genre"]])
@@ -1069,7 +1104,7 @@ def page_create():
             bb = budget_breakdown(result["budget"], gl)
             cast_amt = next((l["amount"] for l in bb if l["item"].startswith("Cast")), 0)
             sal = cast_salary_split(cast_amt, result.get("cast", []))
-        with st.expander(f"💰 Budget breakdown — {_fmt_money(result['budget'])} (estimated)", expanded=True):
+        with st.expander(f"Budget breakdown — {_fmt_money(result['budget'])} (estimated)", expanded=True):
             st.caption(f"Standard {result['genre']} production allocation — real industry percentages, "
                        "not contracted figures."
                        + (" Cast split weighted by each actor's historical ROI." if roi_weighted
@@ -1086,22 +1121,22 @@ def page_create():
                     f'{s["name"]} <b style="color:var(--gold-bright)">{_fmt_money(s["amount"])}</b>'
                     + (f' <span style="opacity:.55">({s["roi"]}× ROI)</span>' if s.get("roi") else "")
                     for s in sal)
-                st.markdown(f'<div class="meta-chip" style="margin-top:12px;">🎭 Est. cast allocation: '
+                st.markdown(f'<div class="meta-chip" style="margin-top:12px;">Estimated cast allocation: '
                             f'{chips}</div>', unsafe_allow_html=True)
 
     st.markdown(f'<div class="script-panel">{result["synopsis"]}</div>', unsafe_allow_html=True)
 
     # ---- suggested cast + directors (glassmorphism) ----
     st.write("")
-    st.markdown('<div class="section-title">🎭 Suggested Cast</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Suggested Cast</div>', unsafe_allow_html=True)
     cast_grid(result["cast"])
     st.write("")
-    st.markdown('<div class="section-title">🎬 Suggested Directors</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Suggested Directors</div>', unsafe_allow_html=True)
     cast_grid(result["directors"])
 
     # ---- continue the conversation ----
     st.write("")
-    st.markdown('<div class="section-title">💬 Continue the conversation</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Continue the conversation</div>', unsafe_allow_html=True)
     st.caption('Not happy with a choice? Ask for changes — e.g. "replace Dev Patel and Cynthia Erivo with someone else."')
     for m in st.session_state.get("chat", []):
         with st.chat_message(m["role"], avatar="🎬" if m["role"] == "assistant" else "🧑"):
@@ -1149,7 +1184,7 @@ def page_insights():
     st.markdown('<div class="gold-rule"></div>', unsafe_allow_html=True)
 
     # ---- per-genre band breakdown ----
-    st.markdown('<div class="section-title">🎬 Budget breakdown by genre</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Budget breakdown by genre</div>', unsafe_allow_html=True)
     g = st.selectbox("Pick a genre", list(GENRE_BANDS.keys()),
                      index=list(GENRE_BANDS.keys()).index("Horror"))
     rows = ""
@@ -1164,9 +1199,9 @@ def page_insights():
 
     # ---- AI assistant ----
     st.write("")
-    st.markdown('<div class="section-title">🤖 Ask the Data</div>', unsafe_allow_html=True)
-    st.caption("Budget, genre & ROI questions are answered straight from the data. "
-               "Actor & year questions unlock in live mode.")
+    st.markdown('<div class="section-title">Ask the Data</div>', unsafe_allow_html=True)
+    st.caption("Budget, genre and ROI questions are answered straight from the data. "
+               "Actor and year questions unlock in live mode.")
     chips = ["Which genre gives high ROI at low budget?", "Top genres by ROI",
              "Compare Horror and Science Fiction", "Which budgets to avoid?"]
     cols = st.columns(len(chips))
@@ -1193,7 +1228,7 @@ def page_insights():
 # ----------------------------------------------------------------------------
 def render_history_sidebar():
     with st.sidebar:
-        st.markdown('<div class="topbar-logo" style="font-size:1.2rem;margin-top:0;">📜 Session History</div>'
+        st.markdown('<div class="topbar-logo" style="font-size:1.2rem;margin-top:0;">Session History</div>'
                     '<div class="topbar-tag">Every project you generate this session</div>',
                     unsafe_allow_html=True)
         st.markdown('<div class="nav-divider"></div>', unsafe_allow_html=True)
@@ -1208,8 +1243,8 @@ def render_history_sidebar():
             sc = h.get("score")
             sc_txt = f" · {sc:.2f}" if isinstance(sc, (int, float)) else ""
             chat_n = len(h.get("chat", []))
-            chat_txt = f" · 💬{chat_n}" if chat_n else ""
-            label = f"{'▸ ' if active else ''}🎬 {h.get('genre','?')}{sc_txt}{chat_txt}\n{h.get('prompt','')[:52]}"
+            chat_txt = f" · {chat_n} msg" if chat_n else ""
+            label = f"{'▸ ' if active else ''}{h.get('genre','?')}{sc_txt}{chat_txt}\n{h.get('prompt','')[:52]}"
             if active:
                 st.markdown('<div class="hist-active">', unsafe_allow_html=True)
             if st.button(label, key=f"hist_{i}", use_container_width=True):
@@ -1222,7 +1257,7 @@ def render_history_sidebar():
             if active:
                 st.markdown('</div>', unsafe_allow_html=True)
         st.markdown('<div class="nav-divider"></div>', unsafe_allow_html=True)
-        if st.button("🗑️  Clear history", key="hist_clear", use_container_width=True):
+        if st.button("Clear history", key="hist_clear", use_container_width=True):
             st.session_state.history = []
             st.session_state.active_idx = None
             st.rerun()
@@ -1238,7 +1273,7 @@ if "page" not in st.session_state:
 # ---- top navigation bar ----
 logo_col, nav_home, nav_create, nav_insights = st.columns([3, 1.0, 1.7, 1.6])
 with logo_col:
-    st.markdown('<div class="topbar-logo">🎬 Greenlight</div>'
+    st.markdown('<div class="topbar-logo">Greenlight</div>'
                 '<div class="topbar-tag">Oscar-grade synopses, on demand.</div>',
                 unsafe_allow_html=True)
 with nav_home:
