@@ -698,6 +698,46 @@ def _bands_df(genres):
                          for g in genres for k in keys])
 
 
+def _band_stats(g):
+    b = GENRE_BANDS[g]; keys = [k for k, _ in BAND_DEFS]
+    peak = max(keys, key=lambda k: b[k][0]); valley = min(keys, key=lambda k: b[k][0])
+    return {"peak": (BAND_DISP[peak], b[peak][0]), "valley": (BAND_DISP[valley], b[valley][0]),
+            "low": b[keys[0]][0], "top": b[keys[-1]][0]}
+
+
+def _compare_summary(gs):
+    """Analyst-style read of a multi-genre band comparison, straight from the real numbers."""
+    s = {g: _band_stats(g) for g in gs}
+    steady = max(gs, key=lambda g: s[g]["valley"][1])      # highest floor = most reliable
+    peaker = max(gs, key=lambda g: s[g]["peak"][1])        # highest ceiling = most upside
+    parts = [f"**{g}** peaks at **{s[g]['peak'][1]}×** in the {s[g]['peak'][0]} band and bottoms at "
+             f"**{s[g]['valley'][1]}×** ({s[g]['valley'][0]})" for g in gs]
+    body = "; ".join(parts) + "."
+    if steady != peaker:
+        tail = (f" **{steady}** is the steadier bet — it holds the highest floor across bands — while "
+                f"**{peaker}** has the bigger ceiling but only pays off at the right budget. At micro-budget "
+                f"both run hot; the gap opens in the middle bands, so size the budget to the genre.")
+    else:
+        tail = (f" **{steady}** leads on both the floor and the ceiling here, making it the stronger pick "
+                f"across the budget range.")
+    return body + tail
+
+
+def _actor_summary(rows):
+    """Analyst read of an actor ROI comparison, built from the per-actor summary rows."""
+    if not rows: return None
+    rk = sorted(rows, key=lambda r: r["Avg ROI / yr"], reverse=True)
+    lead = rk[0]
+    parts = [f"**{r['Actor']}** averages **{r['Avg ROI / yr']}×** per year across {r['Total films']} films "
+             f"(best **{r['Best ROI']}×** in {r['Best year']})" for r in rk]
+    body = "; ".join(parts) + "."
+    if len(rk) > 1:
+        gap = round(lead["Avg ROI / yr"] - rk[1]["Avg ROI / yr"], 2)
+        body += (f" **{lead['Actor']}** leads on average return"
+                 + (f", about {gap}× per year ahead of {rk[1]['Actor']}." if gap > 0.05 else " — though it's a close call."))
+    return body
+
+
 def insight_answer(q):
     """Deterministic budget/genre/ROI analyst over the real band data. No GPU, no DB."""
     ql = q.lower()
@@ -707,7 +747,7 @@ def insight_answer(q):
     if (re.search(r"\b(19|20)\d{2}\b", ql)
             or any(w in ql for w in ["actor", "actress", "director", "cast", "over the year",
                                      "per year", "by year", "each year", "trend"])
-            or ("compare" in ql and len(gs) < 2)):
+            or ((("compare" in ql) or re.search(r"\bvs\.?\b|\bversus\b", ql)) and len(gs) < 2)):
         return {"needs_live": True,
                 "text": "📡 Actor, director, and year-by-year questions read the **full film database** "
                         "(on the live backend). Switch on **Use live backend** to ask those. Right now I can "
@@ -715,6 +755,7 @@ def insight_answer(q):
 
     if len(gs) >= 2:
         return {"text": f"Median ROI across budget bands — {', '.join(gs)}:",
+                "summary": _compare_summary(gs),
                 "df": _bands_df(gs), "chart": "line", "x": "Budget band", "y": "Median ROI", "series": "Genre"}
 
     if len(gs) == 1:
@@ -757,10 +798,13 @@ def insight_answer(q):
                         f"Go lean indie or full tentpole — avoid the middle.",
                 "df": df, "chart": "bar", "x": "Genre", "y": "Worst-band ROI", "series": None}
 
-    return {"text": "I answer **budget & genre ROI** questions from the data. Try: "
+    # nothing local matched -> in live mode, hand it to the backend text-to-SQL (/ask);
+    # in demo mode the text below is shown instead.
+    return {"needs_live": True,
+            "text": "I answer **budget & genre ROI** questions from the data. Try: "
                     "*“which genre gives high ROI at low budget?”*, *“top genres by ROI”*, "
                     "*“compare Horror and Sci-Fi”*, *“which budgets to avoid?”*  "
-                    "(Actor & year questions need live mode.)"}
+                    "(Free-form & actor/year questions need live mode.)"}
 
 
 def _render_insight(ans):
@@ -775,21 +819,49 @@ def _render_insight(ans):
         df = pd.DataFrame(ans["rows"])
     if df is not None and len(df):
         chart, x, y, series = ans.get("chart"), ans.get("x"), ans.get("y"), ans.get("series")
+        enc = None
         try:
             if chart == "line" and x in df.columns and y in df.columns:
                 xsort = [BAND_DISP[k] for k, _ in BAND_DEFS] if "band" in x.lower() else "ascending"
                 enc = alt.Chart(df).mark_line(point=True, strokeWidth=3).encode(
                     x=alt.X(f"{x}:N", sort=xsort, title=x), y=alt.Y(f"{y}:Q", title=y),
-                    **({"color": f"{series}:N"} if series else {}))
-                st.altair_chart(enc, use_container_width=True)
+                    **({"color": f"{series}:N"} if series else {})).properties(height=300)
             elif chart == "bar" and x in df.columns and y in df.columns:
-                enc = alt.Chart(df).mark_bar().encode(
+                enc = alt.Chart(df).mark_bar(size=26).encode(
                     x=alt.X(f"{x}:N", sort="-y", title=x), y=alt.Y(f"{y}:Q", title=y),
-                    color=alt.Color(f"{x}:N", legend=None))
-                st.altair_chart(enc, use_container_width=True)
+                    color=alt.Color(f"{x}:N", legend=None)).properties(height=300)
         except Exception:
-            pass
-        st.dataframe(df, use_container_width=True, hide_index=True)
+            enc = None
+        is_actor = (enc is not None and ans.get("series") == "person"
+                    and {"person", "median_roi"}.issubset(df.columns))
+        actor_summary = None
+        if is_actor:                                     # actor compare: full-width chart + clean summary
+            st.altair_chart(enc, use_container_width=True)
+            try:
+                rows = []
+                for person, d in df.groupby("person"):
+                    best = d.loc[d["median_roi"].idxmax()]
+                    rows.append({"Actor": person,
+                                 "Avg ROI / yr": round(float(d["median_roi"].mean()), 2),
+                                 "Total films": int(d["films"].sum()) if "films" in d else len(d),
+                                 "Best year": int(best["year"]),
+                                 "Best ROI": round(float(best["median_roi"]), 2)})
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                actor_summary = _actor_summary(rows)
+            except Exception:
+                st.dataframe(df, use_container_width=True, hide_index=True)
+        elif enc is not None:                            # genre/budget charts: chart + table side by side
+            c_chart, c_table = st.columns([3, 2])
+            with c_chart:
+                st.altair_chart(enc, use_container_width=True)
+            with c_table:
+                st.dataframe(df, use_container_width=True, hide_index=True, height=300)
+        else:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        summary = ans.get("summary") or actor_summary
+        if summary:
+            st.markdown(f'<div class="insight insight-solid">🧠 <b>AI summary</b> — {summary}</div>',
+                        unsafe_allow_html=True)
     if ans.get("sql"):
         with st.expander("Query the assistant ran"):
             st.code(ans["sql"], language="sql")
